@@ -28,3 +28,9 @@ chunking:
   # Small conditionals/loops will be included in their parent function but not stored separately
   min_conditional_lines: 8
   min_loop_lines: 8
+index_building:
+  # Configuration for build-index CLI mode
+  # Controls which processing steps are enabled when building indexes
+  enable_code_graph: true      # Build code graph using tree-sitter and LSP
+  enable_embeddings: true      # Generate and store code embeddings in vector DB
+  enable_ngram: true           # Build n-gram model for code analysis

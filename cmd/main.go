@@ -182,10 +182,116 @@ func LSPTest(cfg *config.Config, logger *zap.Logger) {
 	baseClient.TestCommand(ctx)
 }
 
-func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []string) {
-	logger.Info("Build index command started",
-		zap.Strings("repositories", repoNames))
 
+
+func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []string) {
+	ctx := context.Background()
+
+	logger.Info("Build index command started",
+		zap.Strings("repositories", repoNames),
+		zap.Bool("code_graph_enabled", cfg.IndexBuilding.EnableCodeGraph),
+		zap.Bool("embeddings_enabled", cfg.IndexBuilding.EnableEmbeddings),
+		zap.Bool("ngram_enabled", cfg.IndexBuilding.EnableNgram))
+
+	// Initialize services based on configuration
+	var codeGraph *service.CodeGraph
+	var repoService *service.RepoService
+	var chunkService *service.CodeChunkService
+	var ngramService *service.NGramService
+
+	// Initialize CodeGraph if enabled
+	if cfg.IndexBuilding.EnableCodeGraph {
+		var err error
+		codeGraph, err = service.NewCodeGraph(
+			cfg.Neo4j.URI,
+			cfg.Neo4j.Username,
+			cfg.Neo4j.Password,
+			cfg,
+			logger,
+		)
+		if err != nil {
+			logger.Fatal("Failed to initialize CodeGraph", zap.Error(err))
+			return
+		}
+		defer codeGraph.Close(ctx)
+
+		// Initialize RepoService for LSP (needed for post-processing)
+		repoService = service.NewRepoService(cfg, logger)
+
+		logger.Info("CodeGraph service initialized for index building")
+	}
+
+	// Initialize ChunkService if enabled
+	if cfg.IndexBuilding.EnableEmbeddings {
+		if cfg.Qdrant.Host == "" || cfg.Ollama.URL == "" {
+			logger.Fatal("Embeddings enabled but Qdrant or Ollama not configured")
+			return
+		}
+
+		vectorDB, err := service.NewQdrantDatabase(cfg.Qdrant.Host, cfg.Qdrant.Port, cfg.Qdrant.APIKey, logger)
+		if err != nil {
+			logger.Fatal("Failed to initialize Qdrant database", zap.Error(err))
+			return
+		}
+		defer vectorDB.Close()
+
+		embeddingModel, err := service.NewOllamaEmbedding(service.OllamaEmbeddingConfig{
+			APIURL:    cfg.Ollama.URL,
+			APIKey:    cfg.Ollama.APIKey,
+			Model:     cfg.Ollama.Model,
+			Dimension: cfg.Ollama.Dimension,
+		}, logger)
+		if err != nil {
+			logger.Fatal("Failed to initialize Ollama embedding model", zap.Error(err))
+			return
+		}
+
+		// Set default thresholds if not configured
+		minConditionalLines := cfg.Chunking.MinConditionalLines
+		minLoopLines := cfg.Chunking.MinLoopLines
+		if minConditionalLines == 0 {
+			minConditionalLines = 5
+		}
+		if minLoopLines == 0 {
+			minLoopLines = 5
+		}
+
+		gcThreshold := cfg.App.GCThreshold
+		if gcThreshold == 0 {
+			gcThreshold = 100
+		}
+
+		numFileThreads := cfg.App.NumFileThreads
+		if numFileThreads == 0 {
+			numFileThreads = 2
+		}
+
+		chunkService = service.NewCodeChunkService(
+			vectorDB,
+			embeddingModel,
+			minConditionalLines,
+			minLoopLines,
+			gcThreshold,
+			numFileThreads,
+			logger,
+		)
+
+		logger.Info("Code chunk service initialized for index building")
+	}
+
+	// Initialize NGramService if enabled
+	if cfg.IndexBuilding.EnableNgram {
+		var err error
+		ngramService, err = service.NewNGramService(logger)
+		if err != nil {
+			logger.Fatal("Failed to initialize N-gram service", zap.Error(err))
+			return
+		}
+
+		logger.Info("N-gram service initialized for index building")
+	}
+
+	// Process each repository
 	for _, repoName := range repoNames {
 		logger.Info("Processing repository for index building",
 			zap.String("repo_name", repoName))
@@ -199,12 +305,85 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 			continue
 		}
 
-		logger.Info("Hello World - Building index for repository",
+		logger.Info("Building indexes for repository",
 			zap.String("repo_name", repo.Name),
 			zap.String("path", repo.Path),
 			zap.String("language", repo.Language))
 
-		// TODO: Add actual index building logic here
+		// 1. Process CodeGraph if enabled
+		if cfg.IndexBuilding.EnableCodeGraph && codeGraph != nil {
+			logger.Info("Building code graph",
+				zap.String("repo_name", repo.Name))
+
+			repoProcessor := controller.NewRepoProcessor(cfg, codeGraph, logger)
+			postProcessor := controller.NewPostProcessor(codeGraph, repoService.GetLspService(), logger)
+
+			if err := repoProcessor.ProcessRepository(ctx, repo); err != nil {
+				logger.Error("Failed to process repository for code graph",
+					zap.String("repo_name", repo.Name),
+					zap.Error(err))
+			} else {
+				logger.Info("Code graph built successfully, running post-processing",
+					zap.String("repo_name", repo.Name))
+
+				if err := postProcessor.PostProcessRepository(ctx, repo); err != nil {
+					logger.Error("Failed to post-process repository",
+						zap.String("repo_name", repo.Name),
+						zap.Error(err))
+				} else {
+					logger.Info("Code graph post-processing completed",
+						zap.String("repo_name", repo.Name))
+				}
+			}
+		}
+
+		// 2. Process Embeddings if enabled
+		if cfg.IndexBuilding.EnableEmbeddings && chunkService != nil {
+			logger.Info("Building code embeddings",
+				zap.String("repo_name", repo.Name))
+
+			collectionName := repo.Name
+			totalChunks, err := chunkService.ProcessDirectory(ctx, repo.Path, collectionName, repo)
+			if err != nil {
+				logger.Error("Failed to process repository for embeddings",
+					zap.String("repo_name", repo.Name),
+					zap.Error(err))
+			} else {
+				logger.Info("Code embeddings built successfully",
+					zap.String("repo_name", repo.Name),
+					zap.Int("total_chunks", totalChunks))
+			}
+		}
+
+		// 3. Process N-gram if enabled
+		if cfg.IndexBuilding.EnableNgram && ngramService != nil {
+			logger.Info("Building n-gram model",
+				zap.String("repo_name", repo.Name))
+
+			n := 3 // trigrams
+			override := false
+			if err := ngramService.ProcessRepository(ctx, repo, n, override); err != nil {
+				logger.Error("Failed to process repository for n-gram",
+					zap.String("repo_name", repo.Name),
+					zap.Error(err))
+			} else {
+				stats, err := ngramService.GetRepositoryStats(ctx, repo.Name)
+				if err != nil {
+					logger.Error("Failed to get n-gram stats",
+						zap.String("repo_name", repo.Name),
+						zap.Error(err))
+				} else {
+					logger.Info("N-gram model built successfully",
+						zap.String("repo_name", repo.Name),
+						zap.Int("n", n),
+						zap.Int("files", stats.TotalFiles),
+						zap.Int("tokens", stats.TotalTokens))
+				}
+			}
+		}
+
+		logger.Info("Completed index building for repository",
+			zap.String("repo_name", repo.Name))
 	}
 
 	logger.Info("Build index command completed")

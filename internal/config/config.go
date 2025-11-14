@@ -71,21 +71,28 @@ type BloomFilterConfig struct {
 	FalsePositiveRate float64 `yaml:"false_positive_rate"`
 }
 
+type IndexBuildingConfig struct {
+	EnableCodeGraph  bool `yaml:"enable_code_graph"`
+	EnableEmbeddings bool `yaml:"enable_embeddings"`
+	EnableNgram      bool `yaml:"enable_ngram"`
+}
+
 func (c *McpConfig) GetAddress() string {
 	//return fmt.Sprintf("%s:%d", c.Host, c.Port) //, c.Path)
 	return fmt.Sprintf(":%d", c.Port) //, c.Path)
 }
 
 type Config struct {
-	Source      SourceConfig      `yaml:"source"`
-	Mcp         McpConfig         `yaml:"mcp"`
-	Neo4j       Neo4jConfig       `yaml:"neo4j"`
-	Kuzu        KuzuConfig        `yaml:"kuzu"`
-	Qdrant      QdrantConfig      `yaml:"qdrant"`
-	Chunking    ChunkingConfig    `yaml:"chunking"`
-	Ollama      OllamaConfig      `yaml:"ollama"`
-	BloomFilter BloomFilterConfig `yaml:"bloom_filter"`
-	App         App               `yaml:"app"`
+	Source        SourceConfig        `yaml:"source"`
+	Mcp           McpConfig           `yaml:"mcp"`
+	Neo4j         Neo4jConfig         `yaml:"neo4j"`
+	Kuzu          KuzuConfig          `yaml:"kuzu"`
+	Qdrant        QdrantConfig        `yaml:"qdrant"`
+	Chunking      ChunkingConfig      `yaml:"chunking"`
+	Ollama        OllamaConfig        `yaml:"ollama"`
+	BloomFilter   BloomFilterConfig   `yaml:"bloom_filter"`
+	IndexBuilding IndexBuildingConfig `yaml:"index_building"`
+	App           App                 `yaml:"app"`
 }
 
 func LoadConfig(appConfigPath string, sourceConfigPath string) (*Config, error) {
