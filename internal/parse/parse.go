@@ -111,6 +111,10 @@ func (fp *FileParser) CreateTranslator(ctx context.Context, filePath string, fil
 		return nil, nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 
+	return fp.CreateTranslatorWithContent(ctx, filePath, fileID, langType, version, content)
+}
+
+func (fp *FileParser) CreateTranslatorWithContent(ctx context.Context, filePath string, fileID int32, langType LanguageType, version int32, content []byte) (*tree_sitter.Tree, *TranslateFromSyntaxTree, error) {
 	language, err := fp.GetLanguageParser(langType)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get language parser: %w", err)
@@ -154,11 +158,19 @@ func (fp *FileParser) relativePath(repo *config.Repository, fullPath string) str
 }
 
 func (fp *FileParser) ParseAndTraverse(ctx context.Context, repo *config.Repository, info os.FileInfo, filePath string, fileID int32, version int32) error {
+	content, err := fp.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+	return fp.ParseAndTraverseWithContent(ctx, repo, info, filePath, fileID, version, content)
+}
+
+func (fp *FileParser) ParseAndTraverseWithContent(ctx context.Context, repo *config.Repository, info os.FileInfo, filePath string, fileID int32, version int32, content []byte) error {
 	languageType := fp.DetectLanguage(filePath)
 	if languageType == Unknown {
 		return fmt.Errorf("unsupported file type for file: %s", filePath)
 	}
-	tree, translator, err := fp.CreateTranslator(ctx, filePath, fileID, languageType, version)
+	tree, translator, err := fp.CreateTranslatorWithContent(ctx, filePath, fileID, languageType, version, content)
 	if err != nil {
 		return err
 	}

@@ -54,15 +54,6 @@ func NewCodeChunkService(vectorDB VectorDatabase, embedding EmbeddingModel, minC
 // ProcessFile processes a single source file and stores chunks in vector DB
 // Returns (chunks, error) - if error is non-nil, processing failed but can be retried
 func (ccs *CodeChunkService) ProcessFile(ctx context.Context, filePath, language, collectionName string) ([]*model.CodeChunk, error) {
-	// Check for existing chunks in the database
-	existingChunks, err := ccs.vectorDB.GetChunksByFilePath(ctx, collectionName, filePath)
-	if err != nil {
-		ccs.logger.Warn("Failed to fetch existing chunks, will process file anyway",
-			zap.String("file", filePath),
-			zap.Error(err))
-		existingChunks = nil
-	}
-
 	// Read file content
 	sourceCode, err := ccs.readFile(filePath)
 	if err != nil {
@@ -71,6 +62,21 @@ func (ccs *CodeChunkService) ProcessFile(ctx context.Context, filePath, language
 			zap.String("file", filePath),
 			zap.Error(err))
 		return nil, nil // Return nil error to continue processing other files
+	}
+
+	return ccs.ProcessFileWithContent(ctx, filePath, language, collectionName, sourceCode)
+}
+
+// ProcessFileWithContent processes a single source file with provided content and stores chunks in vector DB
+// Returns (chunks, error) - if error is non-nil, processing failed but can be retried
+func (ccs *CodeChunkService) ProcessFileWithContent(ctx context.Context, filePath, language, collectionName string, sourceCode []byte) ([]*model.CodeChunk, error) {
+	// Check for existing chunks in the database
+	existingChunks, err := ccs.vectorDB.GetChunksByFilePath(ctx, collectionName, filePath)
+	if err != nil {
+		ccs.logger.Warn("Failed to fetch existing chunks, will process file anyway",
+			zap.String("file", filePath),
+			zap.Error(err))
+		existingChunks = nil
 	}
 
 	// Parse file and generate chunks

@@ -33,3 +33,26 @@ func ExtractPathFromURI(uri string) string {
 }
 
 func Ptr[T any](v T) *T { return &v }
+
+// ShouldSkipDirectory checks if a directory should be skipped during traversal
+func ShouldSkipDirectory(path string) bool {
+	skipDirs := []string{
+		".git", "node_modules", ".vscode", ".idea", "vendor", "target",
+		"build", "dist", "__pycache__", ".pytest_cache", "coverage",
+		"site-packages", ".next", ".nuxt", ".cache", "tmp", "temp",
+	}
+
+	baseName := filepath.Base(path)
+	for _, skipDir := range skipDirs {
+		if baseName == skipDir {
+			return true
+		}
+	}
+
+	// Skip hidden directories (starting with .)
+	if len(baseName) > 0 && baseName[0] == '.' && baseName != "." && baseName != ".." {
+		return true
+	}
+
+	return false
+}

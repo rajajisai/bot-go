@@ -193,13 +193,11 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 		zap.Bool("embeddings_enabled", cfg.IndexBuilding.EnableEmbeddings),
 		zap.Bool("ngram_enabled", cfg.IndexBuilding.EnableNgram))
 
-	// Initialize services based on configuration
-	var codeGraph *service.CodeGraph
-	var repoService *service.RepoService
-	var chunkService *service.CodeChunkService
-	var ngramService *service.NGramService
+	// Initialize processors based on configuration
+	var processors []controller.FileProcessor
 
-	// Initialize CodeGraph if enabled
+	// Initialize CodeGraph processor if enabled
+	var codeGraph *service.CodeGraph
 	if cfg.IndexBuilding.EnableCodeGraph {
 		var err error
 		codeGraph, err = service.NewCodeGraph(
@@ -216,12 +214,15 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 		defer codeGraph.Close(ctx)
 
 		// Initialize RepoService for LSP (needed for post-processing)
-		repoService = service.NewRepoService(cfg, logger)
+		repoService := service.NewRepoService(cfg, logger)
 
-		logger.Info("CodeGraph service initialized for index building")
+		codeGraphProcessor := controller.NewCodeGraphProcessor(cfg, codeGraph, repoService, logger)
+		processors = append(processors, codeGraphProcessor)
+
+		logger.Info("CodeGraph processor initialized for index building")
 	}
 
-	// Initialize ChunkService if enabled
+	// Initialize Embedding processor if enabled
 	if cfg.IndexBuilding.EnableEmbeddings {
 		if cfg.Qdrant.Host == "" || cfg.Ollama.URL == "" {
 			logger.Fatal("Embeddings enabled but Qdrant or Ollama not configured")
@@ -266,7 +267,7 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 			numFileThreads = 2
 		}
 
-		chunkService = service.NewCodeChunkService(
+		chunkService := service.NewCodeChunkService(
 			vectorDB,
 			embeddingModel,
 			minConditionalLines,
@@ -276,20 +277,30 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 			logger,
 		)
 
-		logger.Info("Code chunk service initialized for index building")
+		embeddingProcessor := controller.NewEmbeddingProcessor(chunkService, logger)
+		processors = append(processors, embeddingProcessor)
+
+		logger.Info("Embedding processor initialized for index building")
 	}
 
-	// Initialize NGramService if enabled
+	// Initialize NGram processor if enabled
 	if cfg.IndexBuilding.EnableNgram {
-		var err error
-		ngramService, err = service.NewNGramService(logger)
+		ngramService, err := service.NewNGramService(logger)
 		if err != nil {
 			logger.Fatal("Failed to initialize N-gram service", zap.Error(err))
 			return
 		}
 
-		logger.Info("N-gram service initialized for index building")
+		n := 3        // trigrams
+		override := false
+		ngramProcessor := controller.NewNGramProcessor(ngramService, n, override, logger)
+		processors = append(processors, ngramProcessor)
+
+		logger.Info("N-gram processor initialized for index building")
 	}
+
+	// Create the index builder with all processors
+	indexBuilder := controller.NewIndexBuilder(cfg, processors, logger)
 
 	// Process each repository
 	for _, repoName := range repoNames {
@@ -310,76 +321,12 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 			zap.String("path", repo.Path),
 			zap.String("language", repo.Language))
 
-		// 1. Process CodeGraph if enabled
-		if cfg.IndexBuilding.EnableCodeGraph && codeGraph != nil {
-			logger.Info("Building code graph",
-				zap.String("repo_name", repo.Name))
-
-			repoProcessor := controller.NewRepoProcessor(cfg, codeGraph, logger)
-			postProcessor := controller.NewPostProcessor(codeGraph, repoService.GetLspService(), logger)
-
-			if err := repoProcessor.ProcessRepository(ctx, repo); err != nil {
-				logger.Error("Failed to process repository for code graph",
-					zap.String("repo_name", repo.Name),
-					zap.Error(err))
-			} else {
-				logger.Info("Code graph built successfully, running post-processing",
-					zap.String("repo_name", repo.Name))
-
-				if err := postProcessor.PostProcessRepository(ctx, repo); err != nil {
-					logger.Error("Failed to post-process repository",
-						zap.String("repo_name", repo.Name),
-						zap.Error(err))
-				} else {
-					logger.Info("Code graph post-processing completed",
-						zap.String("repo_name", repo.Name))
-				}
-			}
-		}
-
-		// 2. Process Embeddings if enabled
-		if cfg.IndexBuilding.EnableEmbeddings && chunkService != nil {
-			logger.Info("Building code embeddings",
-				zap.String("repo_name", repo.Name))
-
-			collectionName := repo.Name
-			totalChunks, err := chunkService.ProcessDirectory(ctx, repo.Path, collectionName, repo)
-			if err != nil {
-				logger.Error("Failed to process repository for embeddings",
-					zap.String("repo_name", repo.Name),
-					zap.Error(err))
-			} else {
-				logger.Info("Code embeddings built successfully",
-					zap.String("repo_name", repo.Name),
-					zap.Int("total_chunks", totalChunks))
-			}
-		}
-
-		// 3. Process N-gram if enabled
-		if cfg.IndexBuilding.EnableNgram && ngramService != nil {
-			logger.Info("Building n-gram model",
-				zap.String("repo_name", repo.Name))
-
-			n := 3 // trigrams
-			override := false
-			if err := ngramService.ProcessRepository(ctx, repo, n, override); err != nil {
-				logger.Error("Failed to process repository for n-gram",
-					zap.String("repo_name", repo.Name),
-					zap.Error(err))
-			} else {
-				stats, err := ngramService.GetRepositoryStats(ctx, repo.Name)
-				if err != nil {
-					logger.Error("Failed to get n-gram stats",
-						zap.String("repo_name", repo.Name),
-						zap.Error(err))
-				} else {
-					logger.Info("N-gram model built successfully",
-						zap.String("repo_name", repo.Name),
-						zap.Int("n", n),
-						zap.Int("files", stats.TotalFiles),
-						zap.Int("tokens", stats.TotalTokens))
-				}
-			}
+		// Build all indexes using the unified index builder
+		if err := indexBuilder.BuildIndex(ctx, repo); err != nil {
+			logger.Error("Failed to build indexes for repository",
+				zap.String("repo_name", repo.Name),
+				zap.Error(err))
+			continue
 		}
 
 		logger.Info("Completed index building for repository",
