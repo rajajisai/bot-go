@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"bot-go/internal/config"
@@ -40,8 +40,8 @@ type EvalResult struct {
 
 // TestCaseResult represents results for a single test case
 type TestCaseResult struct {
-	TestCaseDir string                    `json:"test_case_dir"`
-	Metadata    *util.EvalMetadata        `json:"metadata"`
+	TestCaseDir  string                   `json:"test_case_dir"`
+	Metadata     *util.EvalMetadata       `json:"metadata"`
 	Similarities []util.SnippetSimilarity `json:"similarities"`
 }
 

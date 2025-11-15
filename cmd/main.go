@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -182,8 +182,6 @@ func LSPTest(cfg *config.Config, logger *zap.Logger) {
 	baseClient.TestCommand(ctx)
 }
 
-
-
 func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []string) {
 	ctx := context.Background()
 
@@ -291,7 +289,7 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 			return
 		}
 
-		n := 3        // trigrams
+		n := 3 // trigrams
 		override := false
 		ngramProcessor := controller.NewNGramProcessor(ngramService, n, override, logger)
 		processors = append(processors, ngramProcessor)
@@ -359,6 +357,7 @@ func CodeGraphEntry(cfg *config.Config, logger *zap.Logger, repoService *service
 
 	// Initialize RepoProcessor
 	repoProcessor := controller.NewRepoProcessor(cfg, codeGraph, logger)
+	repoProcessor.SetRepoService(repoService) // Set repo service for LSP post-processing
 	postProcessor := controller.NewPostProcessor(codeGraph, repoService.GetLspService(), logger)
 
 	// Start processing repositories in a goroutine

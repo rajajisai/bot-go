@@ -157,6 +157,7 @@ func (fp *FileParser) relativePath(repo *config.Repository, fullPath string) str
 	return relPath
 }
 
+/*
 func (fp *FileParser) ParseAndTraverse(ctx context.Context, repo *config.Repository, info os.FileInfo, filePath string, fileID int32, version int32) error {
 	content, err := fp.ReadFile(filePath)
 	if err != nil {
@@ -164,6 +165,7 @@ func (fp *FileParser) ParseAndTraverse(ctx context.Context, repo *config.Reposit
 	}
 	return fp.ParseAndTraverseWithContent(ctx, repo, info, filePath, fileID, version, content)
 }
+*/
 
 func (fp *FileParser) ParseAndTraverseWithContent(ctx context.Context, repo *config.Repository, info os.FileInfo, filePath string, fileID int32, version int32, content []byte) error {
 	languageType := fp.DetectLanguage(filePath)
