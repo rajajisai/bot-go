@@ -1,4 +1,4 @@
-package cmd
+package main
 
 import (
 	"bot-go/internal/config"

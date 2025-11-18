@@ -7,7 +7,7 @@ MAIN_PATH=./cmd/main.go
 EVAL_PATH=./cmd/run_eval.go
 VENV_DIR=.venv
 
-.PHONY: build build-eval run run-eval clean test deps install-lsp-servers setup-python-env docker-build docker-run docker-run-detached docker-run-with-workdir docker-stop docker-logs docker-compose-up docker-compose-down docker-push docker-tag
+.PHONY: build build-eval run run-eval clean test deps install-lsp-servers setup-python-env build-index build-index-head docker-build docker-run docker-run-detached docker-run-with-workdir docker-stop docker-logs docker-compose-up docker-compose-down docker-push docker-tag
 
 build:
 	go build -o bin/$(BINARY_NAME) $(MAIN_PATH)
@@ -29,6 +29,36 @@ run-eval:
 
 run_test:
 	go run $(MAIN_PATH) -config=source.yaml -test
+
+# Build index for repositories
+# Usage: make build-index REPO=repo-name
+# Usage: make build-index REPO="repo1 repo2 repo3"
+build-index:
+	@if [ -z "$(REPO)" ]; then \
+		echo "Usage: make build-index REPO=repo-name"; \
+		echo "   or: make build-index REPO=\"repo1 repo2 repo3\""; \
+		echo ""; \
+		echo "This will build indexes (CodeGraph, Embeddings, N-gram) based on app.yaml settings"; \
+		exit 1; \
+	fi
+	@for repo in $(REPO); do \
+		bin/$(BINARY_NAME) -app=config/app.yaml -source=config/source.yaml -build-index=$$repo; \
+	done
+
+# Build index using git HEAD (committed versions only)
+# Usage: make build-index-head REPO=repo-name
+# Usage: make build-index-head REPO="repo1 repo2 repo3"
+build-index-head:
+	@if [ -z "$(REPO)" ]; then \
+		echo "Usage: make build-index-head REPO=repo-name"; \
+		echo "   or: make build-index-head REPO=\"repo1 repo2 repo3\""; \
+		echo ""; \
+		echo "This will build indexes using git HEAD (committed versions only)"; \
+		exit 1; \
+	fi
+	@for repo in $(REPO); do \
+		bin/$(BINARY_NAME) -app=config/app.yaml -source=config/source.yaml -build-index=$$repo -head; \
+	done
 
 clean:
 	go clean

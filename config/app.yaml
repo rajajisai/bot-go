@@ -13,6 +13,12 @@ neo4j:
   password: "neo4j"
 kuzu:
   path: "data/kuzu.db"
+mysql:
+    host: "localhost"      # or your MySQL host
+    port: 3306
+    username: "root"       # your MySQL username
+    password: "armchair"   # your MySQL password
+    database: "armchair"   # database name (will be created if it doesn't exist)
 qdrant:
   host: "localhost"
   port: 6334  # gRPC port (6333 is HTTP/REST)
@@ -32,5 +38,5 @@ index_building:
   # Configuration for build-index CLI mode
   # Controls which processing steps are enabled when building indexes
   enable_code_graph: true      # Build code graph using tree-sitter and LSP
-  enable_embeddings: true      # Generate and store code embeddings in vector DB
-  enable_ngram: true           # Build n-gram model for code analysis
+  enable_embeddings: false      # Generate and store code embeddings in vector DB
+  enable_ngram: false           # Build n-gram model for code analysis

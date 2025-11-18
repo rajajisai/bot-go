@@ -77,6 +77,14 @@ type IndexBuildingConfig struct {
 	EnableNgram      bool `yaml:"enable_ngram"`
 }
 
+type MySQLConfig struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+}
+
 func (c *McpConfig) GetAddress() string {
 	//return fmt.Sprintf("%s:%d", c.Host, c.Port) //, c.Path)
 	return fmt.Sprintf(":%d", c.Port) //, c.Path)
@@ -92,6 +100,7 @@ type Config struct {
 	Ollama        OllamaConfig        `yaml:"ollama"`
 	BloomFilter   BloomFilterConfig   `yaml:"bloom_filter"`
 	IndexBuilding IndexBuildingConfig `yaml:"index_building"`
+	MySQL         MySQLConfig         `yaml:"mysql"`
 	App           App                 `yaml:"app"`
 }
 

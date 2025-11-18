@@ -21,6 +21,9 @@ type CodeChunk struct {
 	// Unique identifier for this chunk
 	ID string `json:"id"`
 
+	// FileID from MySQL file_versions table (shared with CodeGraph)
+	FileID int32 `json:"file_id"`
+
 	// Hierarchical metadata
 	ChunkType ChunkType `json:"chunk_type"`
 	Level     int       `json:"level"` // 1=file, 2=class, 3=function, 4=block
@@ -64,6 +67,12 @@ func NewCodeChunk(id string, chunkType ChunkType, level int, content, language, 
 		EndLine:   rng.End.Line,
 		Metadata:  make(map[string]interface{}),
 	}
+}
+
+// WithFileID sets the FileID from MySQL
+func (c *CodeChunk) WithFileID(fileID int32) *CodeChunk {
+	c.FileID = fileID
+	return c
 }
 
 // WithParent sets the parent chunk ID

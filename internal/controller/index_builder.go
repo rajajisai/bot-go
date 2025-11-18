@@ -2,9 +2,11 @@ package controller
 
 import (
 	"bot-go/internal/config"
+	"bot-go/internal/db"
 	"bot-go/internal/util"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -13,17 +15,19 @@ import (
 // IndexBuilder orchestrates the building of various indexes (code graph, embeddings, n-gram)
 // for a repository using a parallel file processing approach
 type IndexBuilder struct {
-	config     *config.Config
-	processors []FileProcessor
-	logger     *zap.Logger
+	config            *config.Config
+	processors        []FileProcessor
+	logger            *zap.Logger
+	fileVersionRepo   *db.FileVersionRepository
 }
 
 // NewIndexBuilder creates a new index builder with the specified processors
-func NewIndexBuilder(config *config.Config, processors []FileProcessor, logger *zap.Logger) *IndexBuilder {
+func NewIndexBuilder(config *config.Config, processors []FileProcessor, fileVersionRepo *db.FileVersionRepository, logger *zap.Logger) *IndexBuilder {
 	return &IndexBuilder{
-		config:     config,
-		processors: processors,
-		logger:     logger,
+		config:          config,
+		processors:      processors,
+		fileVersionRepo: fileVersionRepo,
+		logger:          logger,
 	}
 }
 
@@ -123,10 +127,25 @@ func (ib *IndexBuilder) processFiles(ctx context.Context, repo *config.Repositor
 		default:
 		}
 
+		// Skip special files (Dockerfile, vendor/, node_modules/, etc.) before any processing
+		if util.ShouldSkipFile(filePath) {
+			relPath, _ := util.GetRelativePath(repo.Path, filePath)
+			ib.logger.Debug("Skipping special file",
+				zap.String("path", relPath))
+			return nil // Continue processing other files
+		}
+
 		// Read file content once, centrally
 		// Use optimized reading if useHead is enabled (read from git HEAD for unmodified files)
 		content, err := util.ReadFileOptimized(repo.Path, filePath, useHead, gitInfo)
 		if err != nil {
+			// In HEAD mode, skip untracked files gracefully
+			if useHead && strings.Contains(err.Error(), "file not tracked by git") {
+				relPath, _ := util.GetRelativePath(repo.Path, filePath)
+				ib.logger.Debug("Skipping untracked file in HEAD mode",
+					zap.String("path", relPath))
+				return nil // Continue processing other files
+			}
 			ib.logger.Error("Failed to read file", zap.String("path", filePath), zap.Error(err))
 			return nil // Continue processing other files
 		}
@@ -142,13 +161,20 @@ func (ib *IndexBuilder) processFiles(ctx context.Context, repo *config.Repositor
 			mu.Unlock()
 		}
 
+		// Generate FileContext with FileID from MySQL
+		fileCtx, err := ib.createFileContext(repo.Path, filePath, content, useHead, gitInfo)
+		if err != nil {
+			ib.logger.Error("Failed to create file context", zap.String("path", filePath), zap.Error(err))
+			return nil // Continue processing other files
+		}
+
 		// Process the file through all processors in parallel
 		var wg sync.WaitGroup
 		for _, processor := range ib.processors {
 			wg.Add(1)
 			go func(p FileProcessor) {
 				defer wg.Done()
-				if err := p.ProcessFile(ctx, repo, filePath, content); err != nil {
+				if err := p.ProcessFile(ctx, repo, fileCtx); err != nil {
 					ib.logger.Error("Processor failed to process file",
 						zap.String("processor", p.Name()),
 						zap.String("path", filePath),
@@ -237,4 +263,61 @@ func (ib *IndexBuilder) postProcessRepository(ctx context.Context, repo *config.
 		zap.String("repo_name", repo.Name))
 
 	return nil
+}
+
+// createFileContext generates a FileContext with FileID from MySQL
+func (ib *IndexBuilder) createFileContext(repoPath, filePath string, content []byte, useHead bool, gitInfo *util.GitInfo) (*FileContext, error) {
+	// Calculate file SHA256
+	fileSHA := util.CalculateFileSHA256(content)
+
+	// Get relative path
+	relativePath, err := util.GetRelativePath(repoPath, filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get relative path: %w", err)
+	}
+
+	// Determine if file is ephemeral and get commit ID
+	var commitID *string
+	var ephemeral bool
+
+	if gitInfo != nil && gitInfo.IsGitRepo {
+		// Check if file is modified (ephemeral)
+		ephemeral = util.IsFileModified(gitInfo, filePath)
+
+		if !ephemeral && !useHead {
+			// File is not modified, get its last commit
+			lastCommit, err := util.GetLastCommitForFile(repoPath, filePath)
+			if err != nil {
+				// File might be untracked
+				ib.logger.Debug("Could not get last commit for file, treating as ephemeral",
+					zap.String("path", relativePath),
+					zap.Error(err))
+				ephemeral = true
+			} else {
+				commitID = &lastCommit
+			}
+		} else if useHead && !ephemeral {
+			// Using HEAD mode and file is unmodified, use HEAD commit
+			commitID = &gitInfo.HeadCommitSHA
+		}
+	} else {
+		// Not a git repo, all files are ephemeral
+		ephemeral = true
+	}
+
+	// Get or create FileID from MySQL
+	fileID, err := ib.fileVersionRepo.GetOrCreateFileID(fileSHA, relativePath, ephemeral, commitID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get or create FileID: %w", err)
+	}
+
+	return &FileContext{
+		FileID:       fileID,
+		FilePath:     filePath,
+		RelativePath: relativePath,
+		Content:      content,
+		FileSHA:      fileSHA,
+		CommitID:     commitID,
+		Ephemeral:    ephemeral,
+	}, nil
 }

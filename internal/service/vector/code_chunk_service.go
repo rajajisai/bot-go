@@ -161,6 +161,114 @@ func (ccs *CodeChunkService) ProcessFileWithContent(ctx context.Context, filePat
 	return chunks, nil
 }
 
+// ProcessFileWithContentAndFileID processes a single source file with provided content and FileID
+// This version is used by the IndexBuilder which provides centralized FileID from MySQL
+// Returns (chunks, error) - if error is non-nil, processing failed but can be retried
+func (ccs *CodeChunkService) ProcessFileWithContentAndFileID(ctx context.Context, filePath, language, collectionName string, sourceCode []byte, fileID int32) ([]*model.CodeChunk, error) {
+	// Check for existing chunks in the database
+	existingChunks, err := ccs.vectorDB.GetChunksByFilePath(ctx, collectionName, filePath)
+	if err != nil {
+		ccs.logger.Warn("Failed to fetch existing chunks, will process file anyway",
+			zap.String("file", filePath),
+			zap.Int32("file_id", fileID),
+			zap.Error(err))
+		existingChunks = nil
+	}
+
+	// Parse file and generate chunks
+	chunks, err := ccs.parseAndChunk(ctx, filePath, language, sourceCode)
+	if err != nil {
+		// Parse errors might indicate corrupted files or unsupported syntax - log and skip
+		ccs.logger.Warn("Failed to parse file, skipping",
+			zap.String("file", filePath),
+			zap.String("language", language),
+			zap.Int32("file_id", fileID),
+			zap.Error(err))
+		return nil, nil // Return nil error to continue processing other files
+	}
+
+	if len(chunks) == 0 {
+		ccs.logger.Debug("No chunks generated for file",
+			zap.String("file", filePath),
+			zap.Int32("file_id", fileID))
+		return nil, nil
+	}
+
+	// Set FileID on all chunks
+	for _, chunk := range chunks {
+		chunk.WithFileID(fileID)
+	}
+
+	// Build a map of existing chunk IDs for quick lookup
+	existingChunkMap := make(map[string]*model.CodeChunk)
+	if existingChunks != nil {
+		for _, chunk := range existingChunks {
+			existingChunkMap[chunk.ID] = chunk
+		}
+	}
+
+	// Separate new chunks from existing chunks
+	var newChunks []*model.CodeChunk
+	var existingMatchedChunks []*model.CodeChunk
+
+	for _, chunk := range chunks {
+		if existingChunk, exists := existingChunkMap[chunk.ID]; exists {
+			// Chunk already exists, reuse its embedding
+			chunk.Embedding = existingChunk.Embedding
+			existingMatchedChunks = append(existingMatchedChunks, chunk)
+		} else {
+			// New chunk, needs embedding
+			newChunks = append(newChunks, chunk)
+		}
+	}
+
+	ccs.logger.Info("Chunk analysis for file",
+		zap.String("file", filePath),
+		zap.Int32("file_id", fileID),
+		zap.Int("total_chunks", len(chunks)),
+		zap.Int("existing_chunks", len(existingMatchedChunks)),
+		zap.Int("new_chunks", len(newChunks)))
+
+	// Generate embeddings only for new chunks
+	var chunksToStore []*model.CodeChunk
+	if len(newChunks) > 0 {
+		newChunksWithEmbeddings, err := ccs.generateAndPrepareEmbeddings(ctx, newChunks)
+		if err != nil {
+			// Embedding errors might be transient (API issues) - log and skip
+			ccs.logger.Warn("Failed to generate embeddings, skipping file",
+				zap.String("file", filePath),
+				zap.Int32("file_id", fileID),
+				zap.Error(err))
+			return nil, nil // Return nil error to continue processing other files
+		}
+		chunksToStore = append(chunksToStore, newChunksWithEmbeddings...)
+	}
+
+	// Add existing chunks with their embeddings
+	chunksToStore = append(chunksToStore, existingMatchedChunks...)
+
+	// Store all chunks in vector database (upsert will update existing ones)
+	if len(chunksToStore) > 0 {
+		if err := ccs.vectorDB.UpsertChunks(ctx, collectionName, chunksToStore); err != nil {
+			// Vector DB errors might be transient - log and skip
+			ccs.logger.Warn("Failed to store chunks, skipping file",
+				zap.String("file", filePath),
+				zap.Int32("file_id", fileID),
+				zap.Error(err))
+			return nil, nil // Return nil error to continue processing other files
+		}
+	}
+
+	ccs.logger.Info("Processed file successfully",
+		zap.String("file", filePath),
+		zap.Int32("file_id", fileID),
+		zap.Int("original_chunks", len(chunks)),
+		zap.Int("new_embeddings_generated", len(newChunks)),
+		zap.Int("stored_chunks", len(chunksToStore)))
+
+	return chunks, nil
+}
+
 // ProcessDirectory processes all supported files in a directory recursively
 // Gracefully skips files that fail to read or process
 func (ccs *CodeChunkService) ProcessDirectory(ctx context.Context, dirPath, collectionName string, repoConfig interface{}) (int, error) {

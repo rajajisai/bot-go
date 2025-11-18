@@ -34,16 +34,20 @@ func (np *NGramProcessor) Name() string {
 }
 
 // ProcessFile processes a single file for n-gram model building
-func (np *NGramProcessor) ProcessFile(ctx context.Context, repo *config.Repository, filePath string, content []byte) error {
-	np.logger.Debug("Processing file for n-gram model", zap.String("path", filePath))
+func (np *NGramProcessor) ProcessFile(ctx context.Context, repo *config.Repository, fileCtx *FileContext) error {
+	np.logger.Debug("Processing file for n-gram model",
+		zap.String("path", fileCtx.FilePath),
+		zap.Int32("file_id", fileCtx.FileID))
 
 	// The actual file processing happens in the service's ProcessRepository method
 	// which handles tokenization and n-gram extraction
 	// Here we just track that we've seen the file
-	// The content parameter is provided for consistency but not used here
+	// FileID is available in fileCtx but not used for n-grams yet
 	np.fileCount.Add(1)
 
-	np.logger.Debug("Tracked file for n-gram processing", zap.String("path", filePath))
+	np.logger.Debug("Tracked file for n-gram processing",
+		zap.String("path", fileCtx.FilePath),
+		zap.Int32("file_id", fileCtx.FileID))
 	return nil
 }
 

@@ -1,4 +1,4 @@
-package cmd
+package main
 
 import (
 	"context"
@@ -10,11 +10,9 @@ import (
 
 	"bot-go/internal/config"
 	"bot-go/internal/controller"
+	"bot-go/internal/db"
 	"bot-go/internal/handler"
-	"bot-go/internal/service"
-	"bot-go/internal/service/codegraph"
-	"bot-go/internal/service/ngram"
-	"bot-go/internal/service/vector"
+	init_services "bot-go/internal/init"
 	"bot-go/internal/util"
 	"bot-go/pkg/lsp"
 	"bot-go/pkg/mcp"
@@ -87,80 +85,23 @@ func main() {
 		logger.Fatal("--head flag is only valid with --build-index")
 	}
 
-	repoService := service.NewRepoService(cfg, logger)
-	CodeGraphEntry(cfg, logger, repoService)
-
-	// Initialize CodeChunkService if Qdrant and Ollama are configured
-	var chunkService *vector.CodeChunkService
-	if cfg.Qdrant.Host != "" && cfg.Ollama.URL != "" {
-		logger.Info("Initializing code chunk service",
-			zap.String("qdrant_host", cfg.Qdrant.Host),
-			zap.Int("qdrant_port", cfg.Qdrant.Port),
-			zap.String("ollama_url", cfg.Ollama.URL))
-
-		vectorDB, err := vector.NewQdrantDatabase(cfg.Qdrant.Host, cfg.Qdrant.Port, cfg.Qdrant.APIKey, logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Qdrant database, code chunking will be disabled", zap.Error(err))
-		} else {
-			embeddingModel, err := vector.NewOllamaEmbedding(vector.OllamaEmbeddingConfig{
-				APIURL:    cfg.Ollama.URL,
-				APIKey:    cfg.Ollama.APIKey,
-				Model:     cfg.Ollama.Model,
-				Dimension: cfg.Ollama.Dimension,
-			}, logger)
-			if err != nil {
-				logger.Warn("Failed to initialize Ollama embedding model, code chunking will be disabled", zap.Error(err))
-				vectorDB.Close()
-			} else {
-				// Set default thresholds if not configured
-				minConditionalLines := cfg.Chunking.MinConditionalLines
-				minLoopLines := cfg.Chunking.MinLoopLines
-				if minConditionalLines == 0 {
-					minConditionalLines = 5 // default
-				}
-				if minLoopLines == 0 {
-					minLoopLines = 5 // default
-				}
-
-				gcThreshold := cfg.App.GCThreshold
-				if gcThreshold == 0 {
-					gcThreshold = 100 // default
-				}
-
-				numFileThreads := cfg.App.NumFileThreads
-				if numFileThreads == 0 {
-					numFileThreads = 2 // default
-				}
-
-				chunkService = vector.NewCodeChunkService(
-					vectorDB,
-					embeddingModel,
-					minConditionalLines,
-					minLoopLines,
-					gcThreshold,
-					numFileThreads,
-					logger,
-				)
-				logger.Info("Code chunk service initialized successfully",
-					zap.Int("min_conditional_lines", minConditionalLines),
-					zap.Int("min_loop_lines", minLoopLines),
-					zap.Int64("gc_threshold", gcThreshold))
-			}
-		}
-	} else {
-		logger.Info("Code chunk service disabled (Qdrant or Ollama not configured)")
-	}
-
-	// Initialize NGramService
-	ngramService, err := ngram.NewNGramService(logger)
+	// Initialize all services using the new initialization module
+	opts := init_services.GetServerModeOptions(cfg)
+	container, err := init_services.NewServiceContainer(cfg, opts, logger)
 	if err != nil {
-		logger.Warn("Failed to initialize N-gram service", zap.Error(err))
-	} else {
-		logger.Info("N-gram service initialized successfully")
+		logger.Fatal("Failed to initialize services", zap.Error(err))
 	}
+	defer container.Close(context.Background())
 
-	repoController := controller.NewRepoController(repoService, chunkService, ngramService, logger)
-	mcpServer := mcp.NewCodeGraphServer(repoService, cfg, logger)
+	// Start CodeGraph processing in background if enabled
+	/*
+		if container.CodeGraph != nil {
+			CodeGraphEntry(cfg, logger, container)
+		}
+	*/
+
+	repoController := controller.NewRepoController(container.RepoService, container.ChunkService, container.NgramService, logger)
+	mcpServer := mcp.NewCodeGraphServer(container.RepoService, cfg, logger)
 
 	router := handler.SetupRouter(repoController, mcpServer, logger)
 
@@ -202,114 +143,20 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 		zap.Bool("embeddings_enabled", cfg.IndexBuilding.EnableEmbeddings),
 		zap.Bool("ngram_enabled", cfg.IndexBuilding.EnableNgram))
 
+	// Initialize all services using the new initialization module
+	opts := init_services.GetIndexBuildingOptions(cfg)
+	container, err := init_services.NewServiceContainer(cfg, opts, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize services", zap.Error(err))
+		return
+	}
+	defer container.Close(ctx)
+
 	// Initialize processors based on configuration
-	var processors []controller.FileProcessor
-
-	// Initialize CodeGraph processor if enabled
-	var codeGraph *codegraph.CodeGraph
-	if cfg.IndexBuilding.EnableCodeGraph {
-		var err error
-		codeGraph, err = codegraph.NewCodeGraph(
-			cfg.Neo4j.URI,
-			cfg.Neo4j.Username,
-			cfg.Neo4j.Password,
-			cfg,
-			logger,
-		)
-		if err != nil {
-			logger.Fatal("Failed to initialize CodeGraph", zap.Error(err))
-			return
-		}
-		defer codeGraph.Close(ctx)
-
-		// Initialize RepoService for LSP (needed for post-processing)
-		repoService := service.NewRepoService(cfg, logger)
-
-		codeGraphProcessor := controller.NewCodeGraphProcessor(cfg, codeGraph, repoService, logger)
-		processors = append(processors, codeGraphProcessor)
-
-		logger.Info("CodeGraph processor initialized for index building")
+	if err := container.InitProcessors(cfg); err != nil {
+		logger.Fatal("Failed to initialize processors", zap.Error(err))
+		return
 	}
-
-	// Initialize Embedding processor if enabled
-	if cfg.IndexBuilding.EnableEmbeddings {
-		if cfg.Qdrant.Host == "" || cfg.Ollama.URL == "" {
-			logger.Fatal("Embeddings enabled but Qdrant or Ollama not configured")
-			return
-		}
-
-		vectorDB, err := vector.NewQdrantDatabase(cfg.Qdrant.Host, cfg.Qdrant.Port, cfg.Qdrant.APIKey, logger)
-		if err != nil {
-			logger.Fatal("Failed to initialize Qdrant database", zap.Error(err))
-			return
-		}
-		defer vectorDB.Close()
-
-		embeddingModel, err := vector.NewOllamaEmbedding(vector.OllamaEmbeddingConfig{
-			APIURL:    cfg.Ollama.URL,
-			APIKey:    cfg.Ollama.APIKey,
-			Model:     cfg.Ollama.Model,
-			Dimension: cfg.Ollama.Dimension,
-		}, logger)
-		if err != nil {
-			logger.Fatal("Failed to initialize Ollama embedding model", zap.Error(err))
-			return
-		}
-
-		// Set default thresholds if not configured
-		minConditionalLines := cfg.Chunking.MinConditionalLines
-		minLoopLines := cfg.Chunking.MinLoopLines
-		if minConditionalLines == 0 {
-			minConditionalLines = 5
-		}
-		if minLoopLines == 0 {
-			minLoopLines = 5
-		}
-
-		gcThreshold := cfg.App.GCThreshold
-		if gcThreshold == 0 {
-			gcThreshold = 100
-		}
-
-		numFileThreads := cfg.App.NumFileThreads
-		if numFileThreads == 0 {
-			numFileThreads = 2
-		}
-
-		chunkService := vector.NewCodeChunkService(
-			vectorDB,
-			embeddingModel,
-			minConditionalLines,
-			minLoopLines,
-			gcThreshold,
-			numFileThreads,
-			logger,
-		)
-
-		embeddingProcessor := controller.NewEmbeddingProcessor(chunkService, logger)
-		processors = append(processors, embeddingProcessor)
-
-		logger.Info("Embedding processor initialized for index building")
-	}
-
-	// Initialize NGram processor if enabled
-	if cfg.IndexBuilding.EnableNgram {
-		ngramService, err := ngram.NewNGramService(logger)
-		if err != nil {
-			logger.Fatal("Failed to initialize N-gram service", zap.Error(err))
-			return
-		}
-
-		n := 3 // trigrams
-		override := false
-		ngramProcessor := controller.NewNGramProcessor(ngramService, n, override, logger)
-		processors = append(processors, ngramProcessor)
-
-		logger.Info("N-gram processor initialized for index building")
-	}
-
-	// Create the index builder with all processors
-	indexBuilder := controller.NewIndexBuilder(cfg, processors, logger)
 
 	// Process each repository
 	for _, repoName := range repoNames {
@@ -329,6 +176,18 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 			zap.String("repo_name", repo.Name),
 			zap.String("path", repo.Path),
 			zap.String("language", repo.Language))
+
+		// Create FileVersionRepository for this repository
+		fileVersionRepo, err := db.NewFileVersionRepository(container.MySQLConn.GetDB(), repo.Name, logger)
+		if err != nil {
+			logger.Error("Failed to create file version repository",
+				zap.String("repo_name", repo.Name),
+				zap.Error(err))
+			continue
+		}
+
+		// Create index builder with FileVersionRepository for this specific repo
+		indexBuilder := controller.NewIndexBuilder(cfg, container.Processors, fileVersionRepo, logger)
 
 		// Get git info if using HEAD mode
 		var gitInfo *util.GitInfo
@@ -363,33 +222,18 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 	logger.Info("Build index command completed")
 }
 
-func CodeGraphEntry(cfg *config.Config, logger *zap.Logger, repoService *service.RepoService) {
+func CodeGraphEntry(cfg *config.Config, logger *zap.Logger, container *init_services.ServiceContainer) {
 	if !cfg.App.CodeGraph {
 		logger.Info("CodeGraph is disabled in the configuration")
 		return
 	}
 	ctx := context.Background()
 
-	// Initialize CodeGraph service
-	codeGraph, err := codegraph.NewCodeGraph(
-		cfg.Neo4j.URI,
-		cfg.Neo4j.Username,
-		cfg.Neo4j.Password,
-		cfg,
-		logger,
-	)
-	if err != nil {
-		logger.Fatal("Failed to initialize CodeGraph", zap.Error(err))
+	// Initialize processors for CodeGraph-only mode
+	if err := container.InitProcessors(cfg); err != nil {
+		logger.Fatal("Failed to initialize processors", zap.Error(err))
 		return
 	}
-	//defer codeGraph.Close(ctx)
-
-	// Initialize CodeGraphProcessor
-	codeGraphProcessor := controller.NewCodeGraphProcessor(cfg, codeGraph, repoService, logger)
-
-	// Create IndexBuilder with only CodeGraph processor
-	processors := []controller.FileProcessor{codeGraphProcessor}
-	indexBuilder := controller.NewIndexBuilder(cfg, processors, logger)
 
 	// Start processing repositories in a goroutine
 	go func() {
@@ -402,7 +246,31 @@ func CodeGraphEntry(cfg *config.Config, logger *zap.Logger, repoService *service
 			}
 
 			logger.Info("Processing repository", zap.String("name", repo.Name))
-			err := indexBuilder.BuildIndex(ctx, &repo)
+
+			// Create FileVersionRepository for this repository if MySQL is available
+			var fileVersionRepo *db.FileVersionRepository
+			var err error
+			if container.MySQLConn != nil {
+				fileVersionRepo, err = db.NewFileVersionRepository(container.MySQLConn.GetDB(), repo.Name, logger)
+				if err != nil {
+					logger.Error("Failed to create file version repository, will process without FileID tracking",
+						zap.String("name", repo.Name),
+						zap.Error(err))
+					fileVersionRepo = nil
+				}
+			}
+
+			// Create index builder for this repository
+			// If fileVersionRepo is nil, IndexBuilder will fail - this is intentional to enforce MySQL requirement
+			if fileVersionRepo == nil {
+				logger.Error("Skipping repository - MySQL FileID tracking is required",
+					zap.String("name", repo.Name))
+				continue
+			}
+
+			indexBuilder := controller.NewIndexBuilder(cfg, container.Processors, fileVersionRepo, logger)
+
+			err = indexBuilder.BuildIndex(ctx, &repo)
 			if err != nil {
 				logger.Error("Failed to process repository",
 					zap.String("name", repo.Name),

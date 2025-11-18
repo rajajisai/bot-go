@@ -30,14 +30,24 @@ func (ep *EmbeddingProcessor) Name() string {
 }
 
 // ProcessFile processes a single file for embedding generation
-func (ep *EmbeddingProcessor) ProcessFile(ctx context.Context, repo *config.Repository, filePath string, content []byte) error {
-	ep.logger.Debug("Processing file for embeddings", zap.String("path", filePath))
+func (ep *EmbeddingProcessor) ProcessFile(ctx context.Context, repo *config.Repository, fileCtx *FileContext) error {
+	ep.logger.Debug("Processing file for embeddings",
+		zap.String("path", fileCtx.FilePath),
+		zap.Int32("file_id", fileCtx.FileID))
 
 	collectionName := repo.Name
-	chunks, err := ep.chunkService.ProcessFileWithContent(ctx, filePath, repo.Language, collectionName, content)
+	chunks, err := ep.chunkService.ProcessFileWithContentAndFileID(
+		ctx,
+		fileCtx.FilePath,
+		repo.Language,
+		collectionName,
+		fileCtx.Content,
+		fileCtx.FileID,
+	)
 	if err != nil {
 		ep.logger.Error("Failed to process file for embeddings",
-			zap.String("path", filePath),
+			zap.String("path", fileCtx.FilePath),
+			zap.Int32("file_id", fileCtx.FileID),
 			zap.Error(err))
 		return nil // Continue processing other files
 	}
@@ -46,7 +56,8 @@ func (ep *EmbeddingProcessor) ProcessFile(ctx context.Context, repo *config.Repo
 	ep.chunkCount.Add(int64(len(chunks)))
 
 	ep.logger.Debug("Successfully processed file for embeddings",
-		zap.String("path", filePath),
+		zap.String("path", fileCtx.FilePath),
+		zap.Int32("file_id", fileCtx.FileID),
 		zap.Int("chunks", len(chunks)))
 	return nil
 }
