@@ -11,22 +11,53 @@ import (
 
 // EmbeddingProcessor implements FileProcessor for code chunk embeddings
 type EmbeddingProcessor struct {
-	chunkService *vector.CodeChunkService
-	logger       *zap.Logger
-	chunkCount   atomic.Int64
+	chunkService         *vector.CodeChunkService
+	logger               *zap.Logger
+	chunkCount           atomic.Int64
+	collectionInitialized map[string]bool // Track which collections have been created
 }
 
 // NewEmbeddingProcessor creates a new embedding processor
 func NewEmbeddingProcessor(chunkService *vector.CodeChunkService, logger *zap.Logger) *EmbeddingProcessor {
 	return &EmbeddingProcessor{
-		chunkService: chunkService,
-		logger:       logger,
+		chunkService:          chunkService,
+		logger:                logger,
+		collectionInitialized: make(map[string]bool),
 	}
 }
 
 // Name returns the processor name
 func (ep *EmbeddingProcessor) Name() string {
 	return "Embedding"
+}
+
+// ensureCollection ensures the Qdrant collection exists for the repository
+func (ep *EmbeddingProcessor) ensureCollection(ctx context.Context, collectionName string) error {
+	// Check if we've already initialized this collection
+	if ep.collectionInitialized[collectionName] {
+		return nil
+	}
+
+	// Check if collection exists in Qdrant
+	exists, err := ep.chunkService.GetVectorDB().CollectionExists(ctx, collectionName)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		ep.logger.Info("Creating Qdrant collection", zap.String("collection", collectionName))
+		// Get embedding dimension from the embedding model
+		vectorDim := ep.chunkService.GetEmbeddingModel().GetDimension()
+		err = ep.chunkService.GetVectorDB().CreateCollection(ctx, collectionName, vectorDim, vector.DistanceMetricCosine)
+		if err != nil {
+			return err
+		}
+		ep.logger.Info("Qdrant collection created successfully", zap.String("collection", collectionName))
+	}
+
+	// Mark collection as initialized
+	ep.collectionInitialized[collectionName] = true
+	return nil
 }
 
 // ProcessFile processes a single file for embedding generation
@@ -36,6 +67,15 @@ func (ep *EmbeddingProcessor) ProcessFile(ctx context.Context, repo *config.Repo
 		zap.Int32("file_id", fileCtx.FileID))
 
 	collectionName := repo.Name
+
+	// Ensure collection exists before processing
+	if err := ep.ensureCollection(ctx, collectionName); err != nil {
+		ep.logger.Error("Failed to ensure collection exists",
+			zap.String("collection", collectionName),
+			zap.Error(err))
+		return nil // Continue processing other files
+	}
+
 	chunks, err := ep.chunkService.ProcessFileWithContentAndFileID(
 		ctx,
 		fileCtx.FilePath,

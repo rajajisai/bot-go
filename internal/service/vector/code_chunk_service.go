@@ -803,6 +803,16 @@ func (ccs *CodeChunkService) Close() error {
 	return nil
 }
 
+// GetVectorDB returns the vector database instance
+func (ccs *CodeChunkService) GetVectorDB() VectorDatabase {
+	return ccs.vectorDB
+}
+
+// GetEmbeddingModel returns the embedding model instance
+func (ccs *CodeChunkService) GetEmbeddingModel() EmbeddingModel {
+	return ccs.embedding
+}
+
 // shouldSkipDirectory checks if a directory should be excluded from processing
 func (ccs *CodeChunkService) shouldSkipDirectory(path, name string) bool {
 	// Common directories to skip
