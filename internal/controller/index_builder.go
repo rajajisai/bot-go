@@ -128,7 +128,8 @@ func (ib *IndexBuilder) processFiles(ctx context.Context, repo *config.Repositor
 		}
 
 		// Skip special files (Dockerfile, vendor/, node_modules/, etc.) before any processing
-		if util.ShouldSkipFile(filePath) {
+		// Also skip files not matching repo language if SkipOtherLanguages is enabled
+		if util.ShouldSkipFile(filePath, repo) {
 			relPath, _ := util.GetRelativePath(repo.Path, filePath)
 			ib.logger.Debug("Skipping special file",
 				zap.String("path", relPath))
@@ -169,20 +170,49 @@ func (ib *IndexBuilder) processFiles(ctx context.Context, repo *config.Repositor
 		}
 
 		// Process the file through all processors in parallel
-		var wg sync.WaitGroup
+		/*
+			var wg sync.WaitGroup
+			for _, processor := range ib.processors {
+				wg.Add(1)
+				go func(p FileProcessor) {
+					defer wg.Done()
+					if err := p.ProcessFile(ctx, repo, fileCtx); err != nil {
+						ib.logger.Error("Processor failed to process file",
+							zap.String("processor", p.Name()),
+							zap.String("path", filePath),
+							zap.Error(err))
+					}
+				}(processor)
+			}
+			wg.Wait()
+		*/
+
 		for _, processor := range ib.processors {
-			wg.Add(1)
-			go func(p FileProcessor) {
-				defer wg.Done()
-				if err := p.ProcessFile(ctx, repo, fileCtx); err != nil {
-					ib.logger.Error("Processor failed to process file",
-						zap.String("processor", p.Name()),
-						zap.String("path", filePath),
+			err := processor.ProcessFile(ctx, repo, fileCtx)
+			if err != nil {
+				ib.logger.Error("Processor failed to process file",
+					zap.String("processor", processor.Name()),
+					zap.String("path", filePath),
+					zap.Error(err))
+				// Continue processing other processors
+			} else {
+				// Update status to indicate this processor completed
+				processorStatus := fmt.Sprintf("%s_done", processor.Name())
+				if err := ib.fileVersionRepo.UpdateStatus(fileCtx.FileID, processorStatus); err != nil {
+					ib.logger.Warn("Failed to update processor status",
+						zap.String("processor", processor.Name()),
+						zap.Int32("file_id", fileCtx.FileID),
 						zap.Error(err))
 				}
-			}(processor)
+			}
 		}
-		wg.Wait()
+
+		// Mark file as fully processed (all processors done)
+		if err := ib.fileVersionRepo.UpdateStatus(fileCtx.FileID, "done"); err != nil {
+			ib.logger.Warn("Failed to update final status",
+				zap.Int32("file_id", fileCtx.FileID),
+				zap.Error(err))
+		}
 
 		// Increment file count
 		mu.Lock()

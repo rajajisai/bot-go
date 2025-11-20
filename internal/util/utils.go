@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bot-go/internal/config"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -60,8 +61,16 @@ func ShouldSkipDirectory(path string) bool {
 
 // ShouldSkipFile checks if a file should be skipped during indexing
 // This includes special files like Dockerfiles, lock files, build artifacts, etc.
-func ShouldSkipFile(filePath string) bool {
+// If repo is provided and SkipOtherLanguages is true, only files matching the repo language are processed
+func ShouldSkipFile(filePath string, repo *config.Repository) bool {
 	baseName := filepath.Base(filePath)
+
+	// Language filtering if repo config is provided and SkipOtherLanguages is enabled
+	if repo != nil && repo.SkipOtherLanguages && repo.Language != "" {
+		if !isLanguageMatch(filePath, repo.Language) {
+			return true
+		}
+	}
 
 	// Skip specific file names (case-insensitive)
 	skipFileNames := []string{
@@ -207,4 +216,58 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// isLanguageMatch checks if a file extension matches the specified language
+// Handles language variants (e.g., js includes jsx, ts includes tsx, etc.)
+func isLanguageMatch(filePath, language string) bool {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext == "" {
+		return false
+	}
+
+	// Remove the leading dot
+	ext = strings.TrimPrefix(ext, ".")
+
+	// Define language extension mappings with variants
+	languageExtensions := map[string][]string{
+		"go": {"go"},
+		"python": {"py", "pyw", "pyi", "pyx", "pyd"},
+		"javascript": {"js", "jsx", "mjs", "cjs"},
+		"typescript": {"ts", "tsx", "mts", "cts"},
+		"java": {"java"},
+		"rust": {"rs"},
+		"c": {"c", "h"},
+		"cpp": {"cpp", "cc", "cxx", "hpp", "hxx", "c++", "h++"},
+		"csharp": {"cs"},
+		"ruby": {"rb"},
+		"php": {"php"},
+		"swift": {"swift"},
+		"kotlin": {"kt", "kts"},
+		"scala": {"scala", "sc"},
+		"r": {"r", "rmd"},
+		"shell": {"sh", "bash", "zsh"},
+		"yaml": {"yaml", "yml"},
+		"json": {"json"},
+		"xml": {"xml"},
+		"html": {"html", "htm"},
+		"css": {"css", "scss", "sass", "less"},
+		"sql": {"sql"},
+		"markdown": {"md", "markdown"},
+	}
+
+	// Normalize language name to lowercase
+	normalizedLang := strings.ToLower(language)
+
+	// Check if the extension matches the language
+	if extensions, ok := languageExtensions[normalizedLang]; ok {
+		for _, validExt := range extensions {
+			if ext == validExt {
+				return true
+			}
+		}
+	}
+
+	// If language not found in map, try direct extension match
+	return ext == normalizedLang
 }

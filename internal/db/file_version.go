@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -16,6 +17,7 @@ type FileVersion struct {
 	RelativePath string    `db:"relative_path"`
 	Ephemeral    bool      `db:"ephemeral"`
 	CommitID     *string   `db:"commit_id"`
+	Status       string    `db:"status"`
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }
@@ -70,10 +72,12 @@ func (r *FileVersionRepository) tableName() string {
 }
 
 // EnsureTable creates the file_versions table if it doesn't exist
+// and ensures all required columns are present (handles schema migrations)
 func (r *FileVersionRepository) EnsureTable() error {
 	tableName := r.tableName()
 	r.logger.Info("Ensuring file_versions table exists", zap.String("table", tableName))
 
+	// Create table if it doesn't exist
 	query := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			file_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -81,17 +85,50 @@ func (r *FileVersionRepository) EnsureTable() error {
 			relative_path VARCHAR(512) NOT NULL,
 			ephemeral BOOLEAN NOT NULL DEFAULT FALSE,
 			commit_id VARCHAR(40),
+			status VARCHAR(255) NOT NULL DEFAULT 'processing',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			UNIQUE KEY unique_sha_path_commit (file_sha, relative_path, commit_id),
 			INDEX idx_file_sha (file_sha),
 			INDEX idx_relative_path (relative_path),
-			INDEX idx_commit_id (commit_id)
+			INDEX idx_commit_id (commit_id),
+			INDEX idx_status (status)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 	`, tableName)
 
 	if _, err := r.db.Exec(query); err != nil {
 		return fmt.Errorf("failed to create table: %w", err)
+	}
+
+	// Check if status column exists, add if missing (for existing tables)
+	// Extract the bare table name without backticks for information_schema query
+	bareTableName := strings.Trim(tableName, "`")
+	checkColumnQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		AND TABLE_NAME = '%s'
+		AND COLUMN_NAME = 'status'
+	`, bareTableName)
+
+	var columnCount int
+	err := r.db.QueryRow(checkColumnQuery).Scan(&columnCount)
+	if err != nil {
+		return fmt.Errorf("failed to check for status column: %w", err)
+	}
+
+	if columnCount == 0 {
+		r.logger.Info("Adding missing status column", zap.String("table", tableName))
+		alterQuery := fmt.Sprintf(`
+			ALTER TABLE %s
+			ADD COLUMN status VARCHAR(255) NOT NULL DEFAULT 'processing',
+			ADD INDEX idx_status (status)
+		`, tableName)
+
+		if _, err := r.db.Exec(alterQuery); err != nil {
+			return fmt.Errorf("failed to add status column: %w", err)
+		}
+		r.logger.Info("Status column added successfully", zap.String("table", tableName))
 	}
 
 	r.logger.Info("Table ready", zap.String("table", tableName))
@@ -153,7 +190,7 @@ func (r *FileVersionRepository) findFileVersion(fileSHA, relativePath string, co
 	tableName := r.tableName()
 
 	query := fmt.Sprintf(`
-		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, created_at, updated_at
+		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, status, created_at, updated_at
 		FROM %s
 		WHERE file_sha = ? AND relative_path = ? AND commit_id <=> ?
 		LIMIT 1
@@ -166,6 +203,7 @@ func (r *FileVersionRepository) findFileVersion(fileSHA, relativePath string, co
 		&fv.RelativePath,
 		&fv.Ephemeral,
 		&fv.CommitID,
+		&fv.Status,
 		&fv.CreatedAt,
 		&fv.UpdatedAt,
 	)
@@ -182,7 +220,7 @@ func (r *FileVersionRepository) GetFileByID(fileID int32) (*FileVersion, error) 
 	tableName := r.tableName()
 
 	query := fmt.Sprintf(`
-		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, created_at, updated_at
+		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, status, created_at, updated_at
 		FROM %s
 		WHERE file_id = ?
 	`, tableName)
@@ -194,6 +232,7 @@ func (r *FileVersionRepository) GetFileByID(fileID int32) (*FileVersion, error) 
 		&fv.RelativePath,
 		&fv.Ephemeral,
 		&fv.CommitID,
+		&fv.Status,
 		&fv.CreatedAt,
 		&fv.UpdatedAt,
 	)
@@ -210,7 +249,7 @@ func (r *FileVersionRepository) GetFilesBySHA(fileSHA string) ([]*FileVersion, e
 	tableName := r.tableName()
 
 	query := fmt.Sprintf(`
-		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, created_at, updated_at
+		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, status, created_at, updated_at
 		FROM %s
 		WHERE file_sha = ?
 		ORDER BY created_at DESC
@@ -231,6 +270,7 @@ func (r *FileVersionRepository) GetFilesBySHA(fileSHA string) ([]*FileVersion, e
 			&fv.RelativePath,
 			&fv.Ephemeral,
 			&fv.CommitID,
+			&fv.Status,
 			&fv.CreatedAt,
 			&fv.UpdatedAt,
 		)
@@ -248,7 +288,7 @@ func (r *FileVersionRepository) GetFilesByPath(relativePath string) ([]*FileVers
 	tableName := r.tableName()
 
 	query := fmt.Sprintf(`
-		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, created_at, updated_at
+		SELECT file_id, file_sha, relative_path, ephemeral, commit_id, status, created_at, updated_at
 		FROM %s
 		WHERE relative_path = ?
 		ORDER BY created_at DESC
@@ -269,6 +309,7 @@ func (r *FileVersionRepository) GetFilesByPath(relativePath string) ([]*FileVers
 			&fv.RelativePath,
 			&fv.Ephemeral,
 			&fv.CommitID,
+			&fv.Status,
 			&fv.CreatedAt,
 			&fv.UpdatedAt,
 		)
@@ -307,6 +348,28 @@ func (r *FileVersionRepository) DeleteEphemeralVersions() (int64, error) {
 		zap.String("table", tableName))
 
 	return rowsAffected, nil
+}
+
+// UpdateStatus updates the processing status of a file version
+func (r *FileVersionRepository) UpdateStatus(fileID int32, status string) error {
+	tableName := r.tableName()
+
+	query := fmt.Sprintf(`
+		UPDATE %s
+		SET status = ?
+		WHERE file_id = ?
+	`, tableName)
+
+	_, err := r.db.Exec(query, status, fileID)
+	if err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	r.logger.Debug("Updated file status",
+		zap.Int32("file_id", fileID),
+		zap.String("status", status))
+
+	return nil
 }
 
 // GetStats returns statistics about the file versions

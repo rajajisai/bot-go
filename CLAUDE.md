@@ -34,6 +34,12 @@ go run cmd/main.go -config=source.yaml -test
 
 # Clean build artifacts
 make clean
+
+# Build indexes for repositories (CLI mode)
+make build-index REPO=bot-go                    # Build index from disk
+make build-index-head REPO=bot-go               # Build index from git HEAD (faster)
+./bin/bot-go -app=config/app.yaml -source=config/source.yaml -build-index="repo-name"
+./bin/bot-go -app=config/app.yaml -source=config/source.yaml -build-index="repo-name" --head
 ```
 
 ### Testing
@@ -109,6 +115,23 @@ Configuration loading: `config.LoadConfig(appConfigPath, sourceConfigPath)` merg
 - Both databases support Cypher-like queries
 - Implementations in `neo4j_db.go` and `kuzu_db.go`
 
+**internal/db/mysql.go & file_version.go**:
+- MySQL database for tracking file versions and processing status
+- `MySQLConnection` manages database lifecycle and ensures database exists
+- `FileVersionRepository` manages file version tracking with per-repository tables
+- Table naming: Repository names are sanitized (e.g., `bot-go` → `bot_go_file_versions`)
+- Each file tracked by: `file_id`, `file_sha` (SHA256), `relative_path`, `ephemeral`, `commit_id`, `status`
+- **File versioning**:
+  - Files tied to git commits have `commit_id` and `ephemeral=false`
+  - Modified/uncommitted files have `ephemeral=true` and no `commit_id`
+  - Unique constraint on `(file_sha, relative_path, commit_id)` prevents duplicates
+- **Status tracking**: Monitors processing progress through stages:
+  - Default: `processing` (when FileID created)
+  - Per-processor: `CodeGraph_done`, `Embedding_done`, `NGram_done` (after each processor completes)
+  - Final: `done` (when all processors complete)
+- **Schema migration**: `EnsureTable()` automatically adds missing columns (e.g., `status`) to existing tables
+- Used by `IndexBuilder` to track which files have been processed and their current state
+
 **internal/service/code_graph.go**:
 - High-level API for creating/reading code graph nodes and relationships
 - Node types: FileScope, Function, Class, Variable, Block, Expression, FunctionCall, etc.
@@ -131,6 +154,22 @@ Configuration loading: `config.LoadConfig(appConfigPath, sourceConfigPath)` merg
   - `getCallerGraph`: Returns functions that call a target function (reverse dependencies)
 - Tools return hierarchical XML-style output with hover information
 - MCP server runs on separate port (configured in mcp.port)
+
+**internal/controller/index_builder.go**:
+- `IndexBuilder` orchestrates parallel file processing through registered processors
+- **File processing pipeline**:
+  1. Walk repository directory with `WalkDirTree()` (concurrent, configurable threads)
+  2. Skip special files (Dockerfile, vendor/, node_modules/, bin/, etc.) and optionally non-matching languages
+  3. Read file content (optimized with `--head` flag to read from git object store)
+  4. Create `FileContext` with FileID from MySQL (tracks SHA256, path, commit, ephemeral status)
+  5. Process through all registered processors (CodeGraph, Embedding, NGram) sequentially
+  6. Update status after each processor completes
+- **Git HEAD mode** (`--head` flag):
+  - Reads unmodified files from git object store instead of disk (faster)
+  - Gracefully skips untracked files with debug logging
+  - Tracks which files were read from git vs disk in logs
+- **Language filtering**: When `skip_other_languages` enabled, only process files matching repo language (including variants)
+- Processors can be selectively enabled via config: `EnableCodeGraph`, `EnableEmbeddings`, `EnableNgram`
 
 **internal/controller/repo_processor.go**:
 - `ProcessAllRepositories()` uses `ExecutorPool` for concurrent processing
