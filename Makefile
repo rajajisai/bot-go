@@ -16,7 +16,7 @@ build-eval:
 	go build -o bin/$(EVAL_BINARY_NAME) $(EVAL_PATH)
 
 run:
-	go run $(MAIN_PATH) -source=config/source.yaml -app=config/app.yaml
+	bin/${BINARY_NAME} -source=config/source.yaml -app=config/app.yaml
 
 run-eval:
 	@if [ -z "$(TEST)" ]; then \

@@ -35,13 +35,15 @@ type FileParser struct {
 	parser    *tree_sitter.Parser
 	CodeGraph *codegraph.CodeGraph
 	logger    *zap.Logger
+	Config    *config.Config
 }
 
-func NewFileParser(logger *zap.Logger, cg *codegraph.CodeGraph) *FileParser {
+func NewFileParser(logger *zap.Logger, cg *codegraph.CodeGraph, cfg *config.Config) *FileParser {
 	return &FileParser{
 		parser:    tree_sitter.NewParser(),
 		CodeGraph: cg,
 		logger:    logger,
+		Config:    cfg,
 	}
 }
 
@@ -98,7 +100,7 @@ func (fp *FileParser) GetLanguageVisitor(langType LanguageType, ts *TranslateFro
 		//return NewPrintVisitor(fp.logger, ts), nil
 
 	case JavaScript, TypeScript:
-		return NewPrintVisitor(fp.logger, ts), nil
+		return NewPrintVisitor(ts), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported language type: %v", langType)
@@ -210,13 +212,9 @@ func (fp *FileParser) ParseAndTraverseWithContent(ctx context.Context, repo *con
 		fp.CodeGraph.CreateContainsRelation(ctx, fileScope.ID, rootNodeId, fileID)
 	}
 
-	if pv, ok := visitor.(*PrintVisitor); ok {
-		err = pv.WriteToFile(fmt.Sprintf("%d_syntax_tree.txt", fileID), filePath)
-		if err != nil {
-			fp.logger.Error("Failed to write syntax tree to file", zap.Error(err))
-		} else {
-			fp.logger.Info("Syntax tree written to syntax_tree.txt")
-		}
+	if fp.Config.CodeGraph.PrintParseTree {
+		content := PrintSyntaxTree(ctx, rootNode, translator.FileContent)
+		fp.logger.Info("Syntax Tree:\n" + content)
 	}
 	return nil
 }

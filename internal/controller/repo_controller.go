@@ -6,6 +6,7 @@ import (
 	"bot-go/internal/service/ngram"
 	"bot-go/internal/service/vector"
 	"bot-go/internal/util"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -771,21 +772,28 @@ func (rc *RepoController) CalculateZScore(c *gin.Context) {
 
 // IndexFileRequest represents the request to index a single file
 type IndexFileRequest struct {
-	RepoName     string `json:"repo_name" binding:"required"`
-	RelativePath string `json:"relative_path" binding:"required"`
+	RepoName      string   `json:"repo_name" binding:"required"`
+	RelativePaths []string `json:"relative_paths" binding:"required"`
 }
 
-// IndexFileResponse represents the response after indexing a file
+// IndexFileResponse represents the response after indexing files
 type IndexFileResponse struct {
-	RepoName     string   `json:"repo_name"`
-	RelativePath string   `json:"relative_path"`
-	FileID       int32    `json:"file_id"`
-	FileSHA      string   `json:"file_sha"`
-	Processors   []string `json:"processors_run"`
-	Message      string   `json:"message"`
+	RepoName string              `json:"repo_name"`
+	Files    []IndexedFileResult `json:"files"`
+	Message  string              `json:"message"`
 }
 
-// IndexFile indexes a single file through all registered processors
+// IndexedFileResult represents the result of indexing a single file
+type IndexedFileResult struct {
+	RelativePath string   `json:"relative_path"`
+	FileID       int32    `json:"file_id,omitempty"`
+	FileSHA      string   `json:"file_sha,omitempty"`
+	Processors   []string `json:"processors_run,omitempty"`
+	Success      bool     `json:"success"`
+	Error        string   `json:"error,omitempty"`
+}
+
+// IndexFile indexes multiple files through all registered processors in parallel
 func (rc *RepoController) IndexFile(c *gin.Context) {
 	var request IndexFileRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -793,6 +801,15 @@ func (rc *RepoController) IndexFile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Invalid request payload",
 			"details": err.Error(),
+		})
+		return
+	}
+
+	// Validate that we have files to process
+	if len(request.RelativePaths) == 0 {
+		rc.logger.Error("No files specified in request")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "No files specified. Please provide at least one file path.",
 		})
 		return
 	}
@@ -828,37 +845,7 @@ func (rc *RepoController) IndexFile(c *gin.Context) {
 		return
 	}
 
-	// Build absolute file path
-	filePath := request.RelativePath
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(repo.Path, request.RelativePath)
-	}
-
-	// Check if file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		rc.logger.Error("File not found", zap.String("file_path", filePath))
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "File not found",
-			"details": fmt.Sprintf("File does not exist: %s", request.RelativePath),
-		})
-		return
-	}
-
-	// Read file content
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		rc.logger.Error("Failed to read file", zap.String("file_path", filePath), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to read file",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	// Calculate file SHA256
-	fileSHA := util.CalculateFileSHA256(content)
-
-	// Create FileVersionRepository for this repository
+	// Create FileVersionRepository for this repository (shared across all files)
 	fileVersionRepo, err := db.NewFileVersionRepository(rc.mysqlConn.GetDB(), repo.Name, rc.logger)
 	if err != nil {
 		rc.logger.Error("Failed to create file version repository",
@@ -871,22 +858,135 @@ func (rc *RepoController) IndexFile(c *gin.Context) {
 		return
 	}
 
+	// Get concurrency limit from config, default to 5
+	maxConcurrent := rc.config.App.MaxConcurrentFileProcessing
+	if maxConcurrent <= 0 {
+		maxConcurrent = 5
+	}
+
+	rc.logger.Info("Starting parallel file indexing",
+		zap.String("repo_name", request.RepoName),
+		zap.Int("file_count", len(request.RelativePaths)),
+		zap.Int("max_concurrent", maxConcurrent))
+
+	// Process files in parallel using worker pool
+	results := rc.processFilesInParallel(ctx, repo, request.RelativePaths, fileVersionRepo, maxConcurrent)
+
+	// Count successes and failures
+	successCount := 0
+	failureCount := 0
+	for _, result := range results {
+		if result.Success {
+			successCount++
+		} else {
+			failureCount++
+		}
+	}
+
+	rc.logger.Info("Completed parallel file indexing",
+		zap.String("repo_name", request.RepoName),
+		zap.Int("total_files", len(request.RelativePaths)),
+		zap.Int("successes", successCount),
+		zap.Int("failures", failureCount))
+
+	response := IndexFileResponse{
+		RepoName: request.RepoName,
+		Files:    results,
+		Message:  fmt.Sprintf("Processed %d file(s): %d succeeded, %d failed", len(results), successCount, failureCount),
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// processFilesInParallel processes multiple files concurrently using a worker pool
+func (rc *RepoController) processFilesInParallel(ctx context.Context, repo *config.Repository, relativePaths []string, fileVersionRepo *db.FileVersionRepository, maxConcurrent int) []IndexedFileResult {
+	type fileJob struct {
+		relativePath string
+		index        int
+	}
+
+	// Create channels
+	jobs := make(chan fileJob, len(relativePaths))
+	results := make(chan IndexedFileResult, len(relativePaths))
+
+	// Start worker goroutines
+	for w := 0; w < maxConcurrent; w++ {
+		go func(workerID int) {
+			for job := range jobs {
+				rc.logger.Debug("Worker processing file",
+					zap.Int("worker_id", workerID),
+					zap.String("file", job.relativePath))
+
+				result := rc.processSingleFile(ctx, repo, job.relativePath, fileVersionRepo)
+				results <- result
+			}
+		}(w)
+	}
+
+	// Send jobs to workers
+	for i, relativePath := range relativePaths {
+		jobs <- fileJob{relativePath: relativePath, index: i}
+	}
+	close(jobs)
+
+	// Collect results
+	fileResults := make([]IndexedFileResult, len(relativePaths))
+	for i := 0; i < len(relativePaths); i++ {
+		result := <-results
+		fileResults[i] = result
+	}
+
+	return fileResults
+}
+
+// processSingleFile processes a single file through all processors
+func (rc *RepoController) processSingleFile(ctx context.Context, repo *config.Repository, relativePath string, fileVersionRepo *db.FileVersionRepository) IndexedFileResult {
+	// Build absolute file path
+	filePath := relativePath
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(repo.Path, relativePath)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		rc.logger.Error("File not found", zap.String("file_path", filePath))
+		return IndexedFileResult{
+			RelativePath: relativePath,
+			Success:      false,
+			Error:        fmt.Sprintf("File does not exist: %s", relativePath),
+		}
+	}
+
+	// Read file content
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		rc.logger.Error("Failed to read file", zap.String("file_path", filePath), zap.Error(err))
+		return IndexedFileResult{
+			RelativePath: relativePath,
+			Success:      false,
+			Error:        fmt.Sprintf("Failed to read file: %v", err),
+		}
+	}
+
+	// Calculate file SHA256
+	fileSHA := util.CalculateFileSHA256(content)
+
 	// Get or create FileID from MySQL
-	fileID, err := fileVersionRepo.GetOrCreateFileID(fileSHA, request.RelativePath, true, nil)
+	fileID, err := fileVersionRepo.GetOrCreateFileID(fileSHA, relativePath, true, nil)
 	if err != nil {
 		rc.logger.Error("Failed to create file ID", zap.String("file_path", filePath), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to create file ID",
-			"details": err.Error(),
-		})
-		return
+		return IndexedFileResult{
+			RelativePath: relativePath,
+			Success:      false,
+			Error:        fmt.Sprintf("Failed to create file ID: %v", err),
+		}
 	}
 
 	// Create FileContext
 	fileCtx := &FileContext{
 		FileID:       fileID,
 		FilePath:     filePath,
-		RelativePath: request.RelativePath,
+		RelativePath: relativePath,
 		Content:      content,
 		FileSHA:      fileSHA,
 		CommitID:     nil,
@@ -896,9 +996,9 @@ func (rc *RepoController) IndexFile(c *gin.Context) {
 	// Process through all processors
 	processorsRun := []string{}
 	for _, processor := range rc.processors {
-		rc.logger.Info("Processing file with processor",
+		rc.logger.Debug("Processing file with processor",
 			zap.String("processor", processor.Name()),
-			zap.String("file_path", request.RelativePath),
+			zap.String("file_path", relativePath),
 			zap.Int32("file_id", fileID))
 
 		err := processor.ProcessFile(ctx, repo, fileCtx)
@@ -907,11 +1007,13 @@ func (rc *RepoController) IndexFile(c *gin.Context) {
 				zap.String("processor", processor.Name()),
 				zap.String("file_path", filePath),
 				zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   fmt.Sprintf("Processor '%s' failed", processor.Name()),
-				"details": err.Error(),
-			})
-			return
+			return IndexedFileResult{
+				RelativePath: relativePath,
+				FileID:       fileID,
+				FileSHA:      fileSHA,
+				Success:      false,
+				Error:        fmt.Sprintf("Processor '%s' failed: %v", processor.Name(), err),
+			}
 		}
 
 		processorsRun = append(processorsRun, processor.Name())
@@ -934,19 +1036,16 @@ func (rc *RepoController) IndexFile(c *gin.Context) {
 	}
 
 	rc.logger.Info("Successfully indexed file",
-		zap.String("repo_name", request.RepoName),
-		zap.String("relative_path", request.RelativePath),
+		zap.String("repo_name", repo.Name),
+		zap.String("relative_path", relativePath),
 		zap.Int32("file_id", fileID),
 		zap.Strings("processors", processorsRun))
 
-	response := IndexFileResponse{
-		RepoName:     request.RepoName,
-		RelativePath: request.RelativePath,
+	return IndexedFileResult{
+		RelativePath: relativePath,
 		FileID:       fileID,
 		FileSHA:      fileSHA,
 		Processors:   processorsRun,
-		Message:      fmt.Sprintf("File successfully indexed through %d processor(s)", len(processorsRun)),
+		Success:      true,
 	}
-
-	c.JSON(http.StatusOK, response)
 }

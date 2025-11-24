@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 	"go.uber.org/zap"
@@ -131,21 +132,21 @@ type SyntaxTreeVisitor interface {
 }
 
 type TranslateFromSyntaxTree struct {
-	ScopeStack          []*Scope
-	CurrentScope        *Scope
-	FileID              int32
-	Version             int32
-	NodeIDSeq           uint32
-	CodeGraph           *codegraph.CodeGraph
-	FileContent         []byte
-	Visitor             SyntaxTreeVisitor
-	Logger              *zap.Logger
-	Nodes               map[ast.NodeID]*ast.Node
+	ScopeStack   []*Scope
+	CurrentScope *Scope
+	FileID       int32
+	Version      int32
+	NodeIDSeq    uint32
+	CodeGraph    *codegraph.CodeGraph
+	FileContent  []byte
+	Visitor      SyntaxTreeVisitor
+	Logger       *zap.Logger
+	Nodes        map[ast.NodeID]*ast.Node
 	// Batch writing support
-	EnableBatchWrites   bool
-	BatchSize           int
-	nodeBuffer          []*ast.Node
-	relationBuffer      []codegraph.RelationSpec
+	EnableBatchWrites bool
+	BatchSize         int
+	nodeBuffer        []*ast.Node
+	relationBuffer    []codegraph.RelationSpec
 }
 
 func NewTranslateFromSyntaxTree(fileID int32, version int32, codeGraph *codegraph.CodeGraph,
@@ -298,7 +299,9 @@ func (t *TranslateFromSyntaxTree) GetTreeNodeName(node *tree_sitter.Node) string
 		kind == "property_identifier" ||
 		kind == "type_identifier" ||
 		kind == "shorthand_property_identifier_pattern" ||
-		kind == "field_identifier" {
+		kind == "field_identifier" ||
+		kind == "type_spec" ||
+		strings.HasSuffix(kind, "_identifier") {
 		return t.String(node)
 	}
 
@@ -311,8 +314,14 @@ func (t *TranslateFromSyntaxTree) GetTreeNodeName(node *tree_sitter.Node) string
 		idNode = t.TreeChildByKind(node, "property_identifier")
 	}
 
-	if idNode == nil {
-		idNode = t.TreeChildByKind(node, "type_identifier")
+	/*
+		if idNode == nil {
+			idNode = t.TreeChildByKind(node, "type_identifier")
+		}
+	*/
+
+	if kind == "method_elem" && idNode == nil {
+		idNode = t.TreeChildByKind(node, "field_identifier")
 	}
 
 	if idNode == nil {
@@ -424,8 +433,18 @@ func (t *TranslateFromSyntaxTree) HandleVariable(ctx context.Context, tsNode *tr
 	varNode := t.NewNode(
 		ast.NodeTypeVariable, varName, t.ToRange(tsNode), scopeID,
 	)
+
+	typeId := t.TreeChildByFieldName(tsNode, "type_identifier")
+	if typeId != nil {
+		typeName := t.GetTreeNodeName(typeId)
+		varNode.MetaData = map[string]any{
+			"type": typeName,
+		}
+	}
+
 	t.CodeGraph.CreateVariable(ctx, varNode)
 	t.CurrentScope.AddSymbol(NewSymbol(varNode))
+
 	return varNode.ID
 }
 
@@ -438,7 +457,7 @@ func (t *TranslateFromSyntaxTree) ResolveNameChain(ctx context.Context, nameChai
 			//t.GetTreeNodeName(nameNode) // just for debugging
 			if sym != nil {
 				//t.Logger.Error("Empty name not the first on in list of names", zap.String("prev", sym.Node.Name))
-				debugName := PrintSyntaxTree(ctx, t.Logger, nameNode)
+				debugName := PrintSyntaxTree(ctx, nameNode, t.FileContent)
 				t.Logger.Info("Node with empty name", zap.String("node", debugName))
 			}
 			fakeVarID := t.HandleRhsWithFakeVariable(ctx, "__name__", nameNode, scopeID, nil)
@@ -474,7 +493,11 @@ func (t *TranslateFromSyntaxTree) ResolveNameChain(ctx context.Context, nameChai
 	return sym.Node.ID
 }
 
-func (t *TranslateFromSyntaxTree) HandleClass(ctx context.Context, scopeID ast.NodeID, cls *tree_sitter.Node, methods []*tree_sitter.Node, fields []*tree_sitter.Node) ast.NodeID {
+func (t *TranslateFromSyntaxTree) HandleClass(ctx context.Context,
+	scopeID ast.NodeID,
+	cls *tree_sitter.Node,
+	methods []*tree_sitter.Node,
+	fields []*tree_sitter.Node) ast.NodeID {
 	className := t.GetTreeNodeName(cls)
 	if className == "" {
 		return ast.InvalidNodeID
@@ -492,6 +515,7 @@ func (t *TranslateFromSyntaxTree) HandleClass(ctx context.Context, scopeID ast.N
 		fieldNodeID := t.HandleVariable(ctx, field, classNode.ID)
 		if fieldNodeID != ast.InvalidNodeID {
 			t.CreateContainsRelation(ctx, classNode.ID, fieldNodeID, t.FileID)
+			t.CodeGraph.CreateHasFieldRelation(ctx, classNode.ID, fieldNodeID, t.FileID)
 		}
 	}
 
@@ -499,7 +523,7 @@ func (t *TranslateFromSyntaxTree) HandleClass(ctx context.Context, scopeID ast.N
 		methodNodeID := t.Visitor.TraverseNode(ctx, method, classNode.ID)
 		if methodNodeID != ast.InvalidNodeID {
 			t.CreateContainsRelation(ctx, classNode.ID, methodNodeID, t.FileID)
-			t.CodeGraph.CreateCallsFunctionRelation(ctx, classNode.ID, methodNodeID, t.FileID)
+			t.CodeGraph.CreateHasFieldRelation(ctx, classNode.ID, methodNodeID, t.FileID)
 		}
 	}
 

@@ -42,7 +42,7 @@ func (cgp *CodeGraphProcessor) Name() string {
 
 // ProcessFile processes a single file for code graph building
 func (cgp *CodeGraphProcessor) ProcessFile(ctx context.Context, repo *config.Repository, fileCtx *FileContext) error {
-	fileParser := parse.NewFileParser(cgp.logger, cgp.codeGraph)
+	fileParser := parse.NewFileParser(cgp.logger, cgp.codeGraph, cgp.config)
 
 	// Create a minimal FileInfo for compatibility (we don't need stat anymore)
 	// We'll use a dummy FileInfo that only provides what's needed

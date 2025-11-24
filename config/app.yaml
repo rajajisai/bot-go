@@ -7,6 +7,7 @@ app:
   gopls: "${BOT_GO_PATH}/scripts/gopls.sh"
   python: "${BOT_GO_PATH}/scripts/pylsp.sh"
   num_file_threads: 5
+  max_concurrent_file_processing: 5  # Max number of files to process concurrently in indexFile API
 neo4j:
   uri: "bolt://localhost:7687"
   username: "neo4j"
@@ -44,3 +45,4 @@ code_graph:
   # Configuration for code graph building optimization
   enable_batch_writes: true    # Use batch writes for nodes and relationships (much faster)
   batch_size: 10              # Number of nodes/relations to accumulate before writing to DB
+  print_parse_tree: false

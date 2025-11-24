@@ -8,27 +8,30 @@ import (
 	"strconv"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
-	"go.uber.org/zap"
 )
 
 type PrintVisitor struct {
 	translate *TranslateFromSyntaxTree
-	logger    *zap.Logger
-	indent    int
-	content   string
+	//logger    *zap.Logger
+	indent  int
+	content string
 }
 
-func NewPrintVisitor(logger *zap.Logger, ts *TranslateFromSyntaxTree) *PrintVisitor {
+func NewPrintVisitor(ts *TranslateFromSyntaxTree) *PrintVisitor {
 	return &PrintVisitor{
 		translate: ts,
-		logger:    logger,
-		indent:    0,
-		content:   "",
+		//logger:    logger,
+		indent:  0,
+		content: "",
 	}
 }
 
-func PrintSyntaxTree(ctx context.Context, logger *zap.Logger, tsNode *tree_sitter.Node) string {
-	pv := NewPrintVisitor(logger, nil)
+func PrintSyntaxTree(ctx context.Context, tsNode *tree_sitter.Node, content []byte) string {
+	ts := &TranslateFromSyntaxTree{
+		FileContent: content,
+	}
+	pv := NewPrintVisitor(ts)
+	ts.Visitor = pv
 	pv.TraverseNode(ctx, tsNode, ast.InvalidNodeID)
 	return pv.content
 }

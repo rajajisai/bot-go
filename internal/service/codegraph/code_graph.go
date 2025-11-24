@@ -1102,6 +1102,142 @@ func (cg *CodeGraph) CreateCallsFunctionRelation(ctx context.Context, callerNode
 	return cg.CreateRelation(ctx, callerNodeID, calleeNodeID, "CALLS_FUNCTION", nil, fileID)
 }
 
+// GetNodesByName returns all nodes with a given name and type
+func (cg *CodeGraph) GetNodesByName(ctx context.Context, name string, nodeType ast.NodeType) ([]*ast.Node, error) {
+	return cg.readNodes(ctx, nodeType, map[string]any{"name": name})
+}
+
+// GetNodesByType returns all nodes of a given type
+func (cg *CodeGraph) GetNodesByType(ctx context.Context, nodeType ast.NodeType) ([]*ast.Node, error) {
+	return cg.readNodes(ctx, nodeType, map[string]any{})
+}
+
+// GetNodeByID returns a node by its ID
+func (cg *CodeGraph) GetNodeByID(ctx context.Context, nodeID ast.NodeID) (*ast.Node, error) {
+	// Try each node type until we find the node
+	nodeTypes := []ast.NodeType{
+		ast.NodeTypeClass,
+		ast.NodeTypeFunction,
+		ast.NodeTypeField,
+		ast.NodeTypeVariable,
+		ast.NodeTypeBlock,
+		ast.NodeTypeFileScope,
+	}
+
+	for _, nodeType := range nodeTypes {
+		nodes, err := cg.readNodes(ctx, nodeType, map[string]any{"id": int64(nodeID)})
+		if err == nil && len(nodes) > 0 {
+			return nodes[0], nil
+		}
+	}
+
+	return nil, fmt.Errorf("node with id %d not found", nodeID)
+}
+
+// RelationInfo represents a relationship between nodes
+type RelationInfo struct {
+	FromNodeID ast.NodeID
+	ToNodeID   ast.NodeID
+	Label      string
+}
+
+// GetChildNodes returns all child nodes of a given parent via a relationship
+func (cg *CodeGraph) GetChildNodes(ctx context.Context, parentID ast.NodeID, relationLabel string, childType ast.NodeType) ([]*ast.Node, error) {
+	childLabel := cg.getNodeLabel(childType)
+
+	query := fmt.Sprintf(`
+		MATCH (parent {id: $parentId})-[:%s]->(child:%s)
+		RETURN child
+	`, relationLabel, childLabel)
+
+	records, err := cg.db.ExecuteRead(ctx, query, map[string]any{"parentId": int64(parentID)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get child nodes: %w", err)
+	}
+
+	var results []*ast.Node
+	for _, record := range records {
+		childData, ok := record["child"]
+		if !ok || childData == nil {
+			continue
+		}
+
+		childMap, ok := childData.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		node, err := cg.recordToNode(childMap)
+		if err != nil {
+			continue
+		}
+
+		results = append(results, node)
+	}
+
+	return results, nil
+}
+
+// GetOutgoingRelations returns all outgoing relationships from a node
+func (cg *CodeGraph) GetOutgoingRelations(ctx context.Context, fromNodeID ast.NodeID, relationLabel string) ([]RelationInfo, error) {
+	query := fmt.Sprintf(`
+		MATCH (from {id: $fromId})-[r:%s]->(to)
+		RETURN to.id as toId
+	`, relationLabel)
+
+	records, err := cg.db.ExecuteRead(ctx, query, map[string]any{"fromId": int64(fromNodeID)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get outgoing relations: %w", err)
+	}
+
+	var results []RelationInfo
+	for _, record := range records {
+		toID, ok := record["toId"]
+		if !ok {
+			continue
+		}
+
+		toNodeID := cg.convertToInt64(toID)
+		results = append(results, RelationInfo{
+			FromNodeID: fromNodeID,
+			ToNodeID:   ast.NodeID(toNodeID),
+			Label:      relationLabel,
+		})
+	}
+
+	return results, nil
+}
+
+// GetIncomingRelations returns all incoming relationships to a node
+func (cg *CodeGraph) GetIncomingRelations(ctx context.Context, toNodeID ast.NodeID, relationLabel string) ([]RelationInfo, error) {
+	query := fmt.Sprintf(`
+		MATCH (from)-[r:%s]->(to {id: $toId})
+		RETURN from.id as fromId
+	`, relationLabel)
+
+	records, err := cg.db.ExecuteRead(ctx, query, map[string]any{"toId": int64(toNodeID)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get incoming relations: %w", err)
+	}
+
+	var results []RelationInfo
+	for _, record := range records {
+		fromID, ok := record["fromId"]
+		if !ok {
+			continue
+		}
+
+		fromNodeID := cg.convertToInt64(fromID)
+		results = append(results, RelationInfo{
+			FromNodeID: ast.NodeID(fromNodeID),
+			ToNodeID:   toNodeID,
+			Label:      relationLabel,
+		})
+	}
+
+	return results, nil
+}
+
 func (cg *CodeGraph) CreateUsesVariableRelation(ctx context.Context, userNodeID, variableNodeID ast.NodeID, fileID int32) error {
 	return cg.CreateRelation(ctx, userNodeID, variableNodeID, "USES_VARIABLE", nil, fileID)
 }

@@ -36,10 +36,12 @@ func (gv *GoVisitor) TraverseNode(ctx context.Context, tsNode *tree_sitter.Node,
 		return gv.translate.HandleBlock(ctx, tsNode, scopeID)
 	case "type_declaration":
 		return gv.handleTypeDeclaration(ctx, tsNode, scopeID)
-	case "struct_type":
-		return gv.handleStructType(ctx, tsNode, scopeID)
-	case "interface_type":
-		return gv.handleInterfaceType(ctx, tsNode, scopeID)
+	case "method_elem":
+		return gv.handleMethodElem(ctx, tsNode, scopeID)
+	//case "struct_type":
+	//	return gv.handleStructType(ctx, tsNode, scopeID)
+	//case "interface_type":
+	//	return gv.handleInterfaceType(ctx, tsNode, scopeID)
 	case "return_statement":
 		return gv.handleReturnStatement(ctx, tsNode, scopeID)
 	case "call_expression":
@@ -78,20 +80,27 @@ func (gv *GoVisitor) TraverseNode(ctx context.Context, tsNode *tree_sitter.Node,
 	}
 }
 
-func (gv *GoVisitor) handleSourceFile(ctx context.Context, tsNode *tree_sitter.Node) ast.NodeID {
+func (gv *GoVisitor) handlePackage(ctx context.Context, tsNode *tree_sitter.Node) ast.NodeID {
+	nameNode := gv.translate.TreeChildByKind(tsNode, "package_identifier")
 	moduleNode := ast.NewNode(
 		gv.translate.NextNodeID(), ast.NodeTypeModuleScope, gv.translate.FileID,
-		gv.translate.GetTreeNodeName(tsNode), gv.translate.ToRange(tsNode), gv.translate.Version,
+		gv.translate.GetTreeNodeName(nameNode), gv.translate.ToRange(tsNode), gv.translate.Version,
 		ast.NodeID(gv.translate.FileID),
 	)
 	gv.translate.CodeGraph.CreateModuleScope(ctx, moduleNode)
-	gv.translate.PushScope(false)
-	defer gv.translate.PopScope(ctx, moduleNode.ID)
-	childNodes := gv.translate.TraverseChildren(ctx, tsNode, moduleNode.ID)
-	if len(childNodes) > 0 {
-		gv.translate.CreateContainsRelations(ctx, moduleNode.ID, childNodes)
-	}
 	return moduleNode.ID
+}
+
+func (gv *GoVisitor) handleSourceFile(ctx context.Context, tsNode *tree_sitter.Node) ast.NodeID {
+	packageClause := gv.translate.TreeChildByKind(tsNode, "package_clause")
+	moduleNodeID := gv.handlePackage(ctx, packageClause)
+	gv.translate.PushScope(false)
+	defer gv.translate.PopScope(ctx, moduleNodeID)
+	childNodes := gv.translate.TraverseChildren(ctx, tsNode, moduleNodeID)
+	if len(childNodes) > 0 {
+		gv.translate.CreateContainsRelations(ctx, moduleNodeID, childNodes)
+	}
+	return moduleNodeID
 }
 
 func (gv *GoVisitor) handleFunctionDeclaration(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
@@ -117,33 +126,69 @@ func (gv *GoVisitor) handleMethodDeclaration(ctx context.Context, tsNode *tree_s
 	return gv.translate.CreateFunction(ctx, scopeID, tsNode, allParams, bodyNode)
 }
 
+func (gv *GoVisitor) handleMethodElem(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
+	paramList := gv.translate.TreeChildByKind(tsNode, "parameter_list")
+	params := []*tree_sitter.Node{}
+	if paramList != nil {
+		params = gv.translate.TreeChildrenByKind(paramList, "parameter_declaration")
+	}
+
+	return gv.translate.CreateFunction(ctx, scopeID, tsNode, params, nil)
+}
+
 func (gv *GoVisitor) handleTypeDeclaration(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
 	typeSpecs := gv.translate.TreeChildrenByKind(tsNode, "type_spec")
 	var childNodes []ast.NodeID
 	for _, typeSpec := range typeSpecs {
-		childID := gv.TraverseNode(ctx, typeSpec, scopeID)
-		if childID != ast.InvalidNodeID {
-			childNodes = append(childNodes, childID)
+		structType := gv.translate.TreeChildByKind(typeSpec, "struct_type")
+		if structType != nil {
+			childID := gv.handleStructTypeSpec(ctx, typeSpec, scopeID)
+			if childID != ast.InvalidNodeID {
+				childNodes = append(childNodes, childID)
+			}
+			continue
+		}
+		interfaceType := gv.translate.TreeChildByKind(typeSpec, "interface_type")
+		if interfaceType != nil {
+			childID := gv.handleInterfaceType(ctx, typeSpec, scopeID)
+
+			/*
+				structuTypeId := gv.TraverseNode(ctx, typeSpec, scopeID)
+				if childID != ast.InvalidNodeID {
+					childNodes = append(childNodes, childID)
+				}
+			*/
+			if childID != ast.InvalidNodeID {
+				childNodes = append(childNodes, childID)
+			}
+			continue
 		}
 	}
 	return ast.InvalidNodeID
 }
 
-func (gv *GoVisitor) handleStructType(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
-	fieldList := gv.translate.TreeChildByFieldName(tsNode, "fields")
-	var methods []*tree_sitter.Node
-	if fieldList != nil {
-		methods = gv.translate.NamedChildren(fieldList)
+func (gv *GoVisitor) handleStructTypeSpec(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
+	structType := gv.translate.TreeChildByKind(tsNode, "struct_type")
+	fieldDeclList := gv.translate.TreeChildByKind(structType, "field_declaration_list")
+	if fieldDeclList == nil {
+		return ast.InvalidNodeID
 	}
-	return gv.translate.HandleClass(ctx, scopeID, tsNode, methods, nil)
+	fieldDecls := gv.translate.TreeChildrenByKind(fieldDeclList, "field_declaration")
+
+	/*
+		var fields []*tree_sitter.Node
+		if fieldDecls != nil {
+			field := gv.translate.TreeChildByKind(fieldDecls[0], "field_identifier")
+			fields = append(fields, field)
+		}
+	*/
+	return gv.translate.HandleClass(ctx, scopeID, tsNode, nil, fieldDecls)
 }
 
 func (gv *GoVisitor) handleInterfaceType(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
-	methodList := gv.translate.TreeChildByFieldName(tsNode, "methods")
-	var methods []*tree_sitter.Node
-	if methodList != nil {
-		methods = gv.translate.NamedChildren(methodList)
-	}
+	interfaceType := gv.translate.TreeChildByKind(tsNode, "interface_type")
+	methods := gv.translate.TreeChildrenByKind(interfaceType, "method_elem")
+
 	return gv.translate.HandleClass(ctx, scopeID, tsNode, methods, nil)
 }
 

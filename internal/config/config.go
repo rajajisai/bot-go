@@ -23,13 +23,14 @@ type Repository struct {
 }
 
 type App struct {
-	Port           int    `yaml:"port"`
-	CodeGraph      bool   `yaml:"codegraph"`
-	Gopls          string `yaml:"gopls"`
-	Python         string `yaml:"python"`
-	WorkDir        string `yaml:"workdir,omitempty"`
-	GCThreshold    int64  `yaml:"gc_threshold,omitempty"`
-	NumFileThreads int    `yaml:"num_file_threads,omitempty"`
+	Port                        int    `yaml:"port"`
+	CodeGraph                   bool   `yaml:"codegraph"`
+	Gopls                       string `yaml:"gopls"`
+	Python                      string `yaml:"python"`
+	WorkDir                     string `yaml:"workdir,omitempty"`
+	GCThreshold                 int64  `yaml:"gc_threshold,omitempty"`
+	NumFileThreads              int    `yaml:"num_file_threads,omitempty"`
+	MaxConcurrentFileProcessing int    `yaml:"max_concurrent_file_processing,omitempty"`
 }
 
 type McpConfig struct {
@@ -89,6 +90,7 @@ type MySQLConfig struct {
 type CodeGraphConfig struct {
 	EnableBatchWrites bool `yaml:"enable_batch_writes"`
 	BatchSize         int  `yaml:"batch_size"` // Number of nodes/relations to batch before writing
+	PrintParseTree    bool `yaml:"print_parse_tree"`
 }
 
 func (c *McpConfig) GetAddress() string {
