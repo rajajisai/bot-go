@@ -638,11 +638,12 @@ func strToRange(s string) base.Range {
 
 var (
 	FirstClassMetadata = map[string]bool{
-		"fake":   true,
-		"nameID": true,
-		"return": true,
-		"repo":   true,
-		"path":   true,
+		"fake":     true,
+		"nameID":   true,
+		"return":   true,
+		"repo":     true,
+		"path":     true,
+		"language": true,
 	}
 )
 
@@ -926,43 +927,23 @@ func (cg *CodeGraph) BatchCreateRelations(ctx context.Context, relations []Relat
 	return nil
 }
 
-func (cg *CodeGraph) readNodes(ctx context.Context, nodeType ast.NodeType, query map[string]any) ([]*ast.Node, error) {
-	nodeLabel := cg.getNodeLabel(nodeType)
-	q := ""
-	if len(query) > 0 {
-		q = "WHERE "
-		i := 0
-		for key := range query {
-			if i > 0 {
-				q += " AND\n"
-			}
-			q += fmt.Sprintf("n.%s = $%s", key, key)
-			i++
-		}
-	}
-
-	// For Kuzu, we need to handle the query differently since it doesn't use labels in MATCH the same way
-	fullQuery := fmt.Sprintf(`
-		MATCH (n:%s)
-		%s
-		RETURN n
-	`, nodeLabel, q)
-
-	records, err := cg.db.ExecuteRead(ctx, fullQuery, query)
+func (cg *CodeGraph) readNodesByQuery(ctx context.Context, nodeVarName string, query string, params map[string]any) ([]*ast.Node, error) {
+	records, err := cg.db.ExecuteRead(ctx, query, params)
 	if err != nil {
-		cg.logger.Error("Failed to read node",
-			zap.Int64("nodeType", int64(nodeType)),
+		cg.logger.Error("Failed to read nodes",
+			zap.String("Raw Query", query),
+			zap.Any("Parameters", params),
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to read node: %w", err)
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("node query with type %d not found", nodeType)
+		return nil, fmt.Errorf("no nodes found for query %s", query)
 	}
 
 	var results []*ast.Node
 	for _, record := range records {
-		nodeData, ok := record["n"]
+		nodeData, ok := record[nodeVarName]
 		if !ok || nodeData == nil {
 			continue
 		}
@@ -984,6 +965,67 @@ func (cg *CodeGraph) readNodes(ctx context.Context, nodeType ast.NodeType, query
 	return results, nil
 }
 
+func (cg *CodeGraph) readNodes(ctx context.Context, nodeType ast.NodeType, query map[string]any) ([]*ast.Node, error) {
+	nodeLabel := cg.getNodeLabel(nodeType)
+	q := ""
+	if len(query) > 0 {
+		q = "WHERE "
+		i := 0
+		for key := range query {
+			if i > 0 {
+				q += " AND\n"
+			}
+			q += fmt.Sprintf("n.%s = $%s", key, key)
+			i++
+		}
+	}
+
+	// For Kuzu, we need to handle the query differently since it doesn't use labels in MATCH the same way
+	fullQuery := fmt.Sprintf(`
+		MATCH (n:%s)
+		%s
+		RETURN n
+	`, nodeLabel, q)
+	return cg.readNodesByQuery(ctx, "n", fullQuery, query)
+
+	/*
+		records, err := cg.db.ExecuteRead(ctx, fullQuery, query)
+		if err != nil {
+			cg.logger.Error("Failed to read node",
+				zap.Int64("nodeType", int64(nodeType)),
+				zap.Error(err))
+			return nil, fmt.Errorf("failed to read node: %w", err)
+		}
+
+		if len(records) == 0 {
+			return nil, fmt.Errorf("node query with type %d not found", nodeType)
+		}
+
+		var results []*ast.Node
+		for _, record := range records {
+			nodeData, ok := record["n"]
+			if !ok || nodeData == nil {
+				continue
+			}
+
+			// Convert map to our GraphNode interface and then to ast.Node
+			nodeMap, ok := nodeData.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			node, err := cg.recordToNode(nodeMap)
+			if err != nil {
+				return nil, err
+			}
+
+			results = append(results, node)
+		}
+
+		return results, nil
+	*/
+}
+
 func (cg *CodeGraph) readNodeByType(ctx context.Context, nodeID ast.NodeID, nodeType ast.NodeType) (*ast.Node, error) {
 	nodes, err := cg.readNodes(ctx, nodeType, map[string]any{"id": int64(nodeID)})
 	if err != nil {
@@ -993,6 +1035,13 @@ func (cg *CodeGraph) readNodeByType(ctx context.Context, nodeID ast.NodeID, node
 		return nil, fmt.Errorf("node with id %d and type %d found - expected 1 but got %d", nodeID, nodeType, len(nodes))
 	}
 	return nodes[0], nil
+}
+
+func (cg *CodeGraph) FindNodesByNameAndTypeInFile(ctx context.Context, name string, nodeType ast.NodeType, fileID int32) ([]*ast.Node, error) {
+	return cg.readNodes(ctx, nodeType, map[string]any{
+		"name":   name,
+		"fileId": int64(fileID),
+	})
 }
 
 func (cg *CodeGraph) CreateRelationReal(ctx context.Context, parentNodeID, childNodeID ast.NodeID,
@@ -1418,4 +1467,344 @@ func (cg *CodeGraph) convertToInt32(value any) int32 {
 		cg.logger.Warn("Unexpected type for int32 conversion", zap.Any("value", value), zap.String("type", fmt.Sprintf("%T", value)))
 		return 0
 	}
+}
+
+// UpdateNodeMetaData updates the metadata of an existing node
+// Works in both batch and non-batch write modes
+// In batch mode: updates the buffered node if it exists, otherwise performs immediate update
+// In non-batch mode: performs immediate update to database
+func (cg *CodeGraph) UpdateNodeMetaData(ctx context.Context, nodeID ast.NodeID, fileID int32, metadata map[string]any) error {
+	if len(metadata) == 0 {
+		return fmt.Errorf("metadata cannot be nil or empty")
+	}
+
+	// If batch writes are enabled, try to update the buffered node first
+	if cg.enableBatchWrites {
+		cg.bufferMutex.Lock()
+		buffer := cg.buffers[fileID]
+		cg.bufferMutex.Unlock()
+
+		if buffer != nil {
+			// Try to find the node in the buffer
+			for _, node := range buffer.Nodes {
+				if node.ID == nodeID {
+					// Update the node's metadata in the buffer
+					if node.MetaData == nil {
+						node.MetaData = make(map[string]any)
+					}
+					for key, value := range metadata {
+						node.MetaData[key] = value
+					}
+					cg.logger.Debug("Updated node metadata in buffer",
+						zap.Int64("nodeId", int64(nodeID)),
+						zap.Int32("fileId", fileID))
+					return nil
+				}
+			}
+			// Node not found in buffer, fall through to immediate update
+		}
+	}
+
+	// Perform immediate update (either batch mode disabled, or node not in buffer)
+	return cg.updateNodeMetaDataReal(ctx, nodeID, metadata)
+}
+
+// updateNodeMetaDataReal performs the actual database update
+func (cg *CodeGraph) updateNodeMetaDataReal(ctx context.Context, nodeID ast.NodeID, metadata map[string]any) error {
+	// Prepare parameters for the update
+	parameters := make(map[string]any)
+	newMetadata := make(map[string]any)
+
+	// Process metadata to separate first-class properties from nested metadata
+	cg.populateFirstClassMetadata(metadata, parameters, newMetadata)
+
+	// Flatten remaining metadata
+	if len(newMetadata) > 0 {
+		cg.flattenMetadata(newMetadata, parameters)
+	}
+
+	if len(parameters) == 0 {
+		return fmt.Errorf("no valid metadata to update")
+	}
+
+	// Build SET clause
+	setQ := cg.mapToSetParamString(parameters, "n")
+
+	// Add node ID to parameters
+	parameters["id"] = int64(nodeID)
+
+	// Remove the id from SET clause since we use it in MATCH
+	/*
+		setQ = strings.Replace(setQ, "n.id = $id, ", "", 1)
+		setQ = strings.Replace(setQ, ", n.id = $id", "", 1)
+		setQ = strings.Replace(setQ, "n.id = $id", "", 1)
+	*/
+
+	if strings.TrimSpace(setQ) == "" {
+		return fmt.Errorf("no properties to update after processing")
+	}
+
+	// Update the node using MATCH + SET
+	query := fmt.Sprintf(`
+		MATCH (n {id: $id})
+		SET %s
+		RETURN n
+	`, setQ)
+
+	records, err := cg.db.ExecuteWrite(ctx, query, parameters)
+	if err != nil {
+		cg.logger.Error("Failed to update node metadata",
+			zap.Int64("nodeId", int64(nodeID)),
+			zap.Error(err))
+		return fmt.Errorf("failed to update node metadata: %w", err)
+	}
+
+	if len(records) == 0 {
+		return fmt.Errorf("node with id %d not found", nodeID)
+	}
+
+	cg.logger.Debug("Updated node metadata in database",
+		zap.Int64("nodeId", int64(nodeID)),
+		zap.Int("propertiesUpdated", len(parameters)-1))
+
+	return nil
+}
+
+// BatchUpdateNodeMetaData updates metadata for multiple nodes in a single transaction
+// This is more efficient than calling UpdateNodeMetaData multiple times
+func (cg *CodeGraph) BatchUpdateNodeMetaData(ctx context.Context, updates map[ast.NodeID]map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	cg.logger.Debug("Batch updating node metadata", zap.Int("count", len(updates)))
+
+	// If batch writes are enabled, try to update buffered nodes first
+	if cg.enableBatchWrites {
+		remainingUpdates := make(map[ast.NodeID]map[string]any)
+
+		// Group updates by fileID for efficient buffer lookup
+		for nodeID, metadata := range updates {
+			updated := false
+
+			// Check all buffers (we don't know which file each node belongs to)
+			cg.bufferMutex.Lock()
+			for _, buffer := range cg.buffers {
+				for _, node := range buffer.Nodes {
+					if node.ID == nodeID {
+						// Update the node's metadata in the buffer
+						if node.MetaData == nil {
+							node.MetaData = make(map[string]any)
+						}
+						for key, value := range metadata {
+							node.MetaData[key] = value
+						}
+						updated = true
+						break
+					}
+				}
+				if updated {
+					break
+				}
+			}
+			cg.bufferMutex.Unlock()
+
+			if !updated {
+				remainingUpdates[nodeID] = metadata
+			}
+		}
+
+		// If all nodes were updated in buffers, we're done
+		if len(remainingUpdates) == 0 {
+			cg.logger.Debug("All nodes updated in buffers", zap.Int("count", len(updates)))
+			return nil
+		}
+
+		// Update remaining nodes in database
+		updates = remainingUpdates
+	}
+
+	// Perform batch update in database
+	// Build a single query with UNWIND for all updates
+	var updateItems []map[string]any
+	for nodeID, metadata := range updates {
+		parameters := make(map[string]any)
+		newMetadata := make(map[string]any)
+
+		cg.populateFirstClassMetadata(metadata, parameters, newMetadata)
+		if len(newMetadata) > 0 {
+			cg.flattenMetadata(newMetadata, parameters)
+		}
+
+		if len(parameters) > 0 {
+			parameters["id"] = int64(nodeID)
+			updateItems = append(updateItems, parameters)
+		}
+	}
+
+	if len(updateItems) == 0 {
+		return fmt.Errorf("no valid metadata to update")
+	}
+
+	// Use UNWIND to process all updates
+	query := `
+		UNWIND $updates as update
+		MATCH (n {id: update.id})
+		SET n += update
+		RETURN count(n) as updated
+	`
+
+	records, err := cg.db.ExecuteWrite(ctx, query, map[string]any{"updates": updateItems})
+	if err != nil {
+		cg.logger.Error("Failed to batch update node metadata", zap.Error(err))
+		return fmt.Errorf("failed to batch update node metadata: %w", err)
+	}
+
+	updatedCount := int64(0)
+	if len(records) > 0 {
+		if count, ok := records[0]["updated"]; ok {
+			updatedCount = cg.convertToInt64(count)
+		}
+	}
+
+	cg.logger.Debug("Batch updated node metadata in database",
+		zap.Int64("nodesUpdated", updatedCount),
+		zap.Int("requested", len(updates)))
+
+	return nil
+}
+
+func (cg *CodeGraph) FindClassInModule(ctx context.Context, name string, moduleName string) ([]*ast.Node, error) {
+	q := `MATCH (n:Class {name: $name})
+	MATCH (m: ModuleScope {name: $moduleName})
+	WHERE (m)-[:CONTAINS]->(n)
+	RETURN n
+	`
+
+	return cg.readNodesByQuery(ctx, "n", q, map[string]any{
+		"name":       name,
+		"moduleName": moduleName,
+	})
+}
+
+/*
+func (cg *CodeGraph) FindClassInFile(ctx context.Context, name string, fileId int32) ([]*ast.Node, error) {
+	return cg.readNodeByType(ctx)
+}
+*/
+
+func (t *CodeGraph) MarkThis(ctx context.Context, fileID int32, thisNodeId ast.NodeID, classNodeId ast.NodeID) {
+	_ = t.CreateRelation(ctx, thisNodeId, classNodeId, "THIS", nil, fileID)
+}
+
+func (cg *CodeGraph) GetModuleName(ctx context.Context, fileId int32) (string, error) {
+	// Query the database (either batch mode disabled, or module not in buffer)
+	query := `
+		MATCH (f:FileScope {id: $fileId})-[:CONTAINS]->(m:ModuleScope)
+		RETURN m.name AS moduleName
+	`
+
+	parameters := map[string]any{
+		"fileId": fileId,
+	}
+
+	records, err := cg.db.ExecuteRead(ctx, query, parameters)
+	if err != nil {
+		cg.logger.Error("Failed to get module name", zap.Error(err))
+		return "", fmt.Errorf("failed to get module name: %w", err)
+	}
+
+	if len(records) == 0 {
+		return "", fmt.Errorf("module not found for file node ID %d", fileId)
+	}
+
+	moduleName, ok := records[0]["moduleName"]
+	if !ok {
+		return "", fmt.Errorf("moduleName not found in query result")
+	}
+
+	return moduleName.(string), nil
+}
+
+func (cg *CodeGraph) UpdateFakeClasses(ctx context.Context, fileID int32) error {
+	// find all the modules in the given file scope
+	moduleQuery := `
+		MATCH(m:ModuleScope {fileId: $fileID})
+		RETURN m
+	`
+
+	moduleParameters := map[string]any{
+		"fileID": fileID,
+	}
+
+	moduleRecords, err := cg.readNodesByQuery(ctx, "m", moduleQuery, moduleParameters)
+	if err != nil {
+		return fmt.Errorf("failed to read modules: %w", err)
+	}
+
+	if len(moduleRecords) != 1 {
+		return fmt.Errorf("expected exactly one module in file %d, found %d", fileID, len(moduleRecords))
+	}
+
+	moduleNode := moduleRecords[0]
+
+	// find all fake classes in the given file scope
+	query := `
+		MATCH (c:Class {fileId: $fileScopeID, is_fake: true})
+		RETURN c
+	`
+
+	parameters := map[string]any{
+		"fileID": fileID,
+	}
+
+	records, err := cg.readNodesByQuery(ctx, "c", query, parameters)
+	if err != nil {
+		return fmt.Errorf("failed to read fake classes: %w", err)
+	}
+
+	for _, fakeClass := range records {
+		// find actual class in module with same name
+		actualClasses, err := cg.FindClassInModule(ctx, fakeClass.Name, moduleNode.Name)
+		if err != nil {
+			return fmt.Errorf("failed to find actual class in module: %w", err)
+		}
+
+		if len(actualClasses) == 1 {
+			// move all children of fake class to actual class
+			moveQuery := `
+				MATCH (fake:Class {id: $fakeClassID})-[r:CONTAINS]->(child)
+				MATCH (actual:Class {id: $actualClassID})
+				MERGE (actual)-[:CONTAINS]->(child)
+				DELETE r
+			`
+			moveParameters := map[string]any{
+				"fakeClassID":   int64(fakeClass.ID),
+				"actualClassID": int64(actualClasses[0].ID),
+			}
+			_, err := cg.db.ExecuteWrite(ctx, moveQuery, moveParameters)
+			if err != nil {
+				return fmt.Errorf("failed to move children from fake class to actual class: %w", err)
+			}
+
+			// delete fake class
+			deleteQuery := `
+				MATCH (fake:Class {id: $fakeClassID})
+				DETACH DELETE fake
+			`
+			deleteParameters := map[string]any{
+				"fakeClassID": int64(fakeClass.ID),
+			}
+			_, err = cg.db.ExecuteWrite(ctx, deleteQuery, deleteParameters)
+			if err != nil {
+				return fmt.Errorf("failed to delete fake class: %w", err)
+			}
+
+			cg.logger.Debug("Replaced fake class with actual class",
+				zap.String("className", fakeClass.Name),
+				zap.Int64("fakeClassID", int64(fakeClass.ID)),
+				zap.Int64("actualClassID", int64(actualClasses[0].ID)))
+		}
+	}
+	return nil
 }

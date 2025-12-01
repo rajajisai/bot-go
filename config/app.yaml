@@ -43,6 +43,6 @@ index_building:
   enable_ngram: true           # Build n-gram model for code analysis
 code_graph:
   # Configuration for code graph building optimization
-  enable_batch_writes: true    # Use batch writes for nodes and relationships (much faster)
+  enable_batch_writes: false    # Use batch writes for nodes and relationships (much faster)
   batch_size: 10              # Number of nodes/relations to accumulate before writing to DB
   print_parse_tree: false

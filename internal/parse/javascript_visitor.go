@@ -122,7 +122,7 @@ func (jsv *JavaScriptVisitor) handleFunctionDeclaration(ctx context.Context, tsN
 	paramsNode := jsv.translate.TreeChildByFieldName(tsNode, "parameters")
 	bodyNode := jsv.translate.TreeChildByFieldName(tsNode, "body")
 
-	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, jsv.translate.NamedChildren(paramsNode), bodyNode)
+	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, "", jsv.translate.NamedChildren(paramsNode), bodyNode)
 }
 
 func (jsv *JavaScriptVisitor) handleArrowFunction(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
@@ -132,21 +132,21 @@ func (jsv *JavaScriptVisitor) handleArrowFunction(ctx context.Context, tsNode *t
 	}
 	bodyNode := jsv.translate.TreeChildByFieldName(tsNode, "body")
 
-	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, jsv.translate.NamedChildren(paramsNode), bodyNode)
+	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, "", jsv.translate.NamedChildren(paramsNode), bodyNode)
 }
 
 func (jsv *JavaScriptVisitor) handleFunctionExpression(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
 	paramsNode := jsv.translate.TreeChildByFieldName(tsNode, "parameters")
 	bodyNode := jsv.translate.TreeChildByFieldName(tsNode, "body")
 
-	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, jsv.translate.NamedChildren(paramsNode), bodyNode)
+	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, "", jsv.translate.NamedChildren(paramsNode), bodyNode)
 }
 
 func (jsv *JavaScriptVisitor) handleMethodDefinition(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
 	paramsNode := jsv.translate.TreeChildByFieldName(tsNode, "parameters")
 	bodyNode := jsv.translate.TreeChildByFieldName(tsNode, "body")
 
-	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, jsv.translate.NamedChildren(paramsNode), bodyNode)
+	return jsv.translate.CreateFunction(ctx, scopeID, tsNode, "", jsv.translate.NamedChildren(paramsNode), bodyNode)
 }
 
 func (jsv *JavaScriptVisitor) handleClassDeclaration(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
@@ -155,7 +155,7 @@ func (jsv *JavaScriptVisitor) handleClassDeclaration(ctx context.Context, tsNode
 	if bodyNode != nil {
 		methods = jsv.translate.TreeChildrenByKind(bodyNode, "method_definition")
 	}
-	return jsv.translate.HandleClass(ctx, scopeID, tsNode, methods, nil)
+	return jsv.translate.HandleClass(ctx, scopeID, tsNode, "", methods, nil)
 }
 
 func (jsv *JavaScriptVisitor) handleClassExpression(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
@@ -164,7 +164,7 @@ func (jsv *JavaScriptVisitor) handleClassExpression(ctx context.Context, tsNode 
 	if bodyNode != nil {
 		methods = jsv.translate.TreeChildrenByKind(bodyNode, "method_definition")
 	}
-	return jsv.translate.HandleClass(ctx, scopeID, tsNode, methods, nil)
+	return jsv.translate.HandleClass(ctx, scopeID, tsNode, "", methods, nil)
 }
 
 func (jsv *JavaScriptVisitor) handleReturnStatement(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {

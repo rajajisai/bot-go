@@ -2,6 +2,7 @@ package parse
 
 import (
 	"bot-go/internal/model/ast"
+	"bot-go/pkg/lsp/base"
 	"context"
 
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
@@ -104,36 +105,120 @@ func (gv *GoVisitor) handleSourceFile(ctx context.Context, tsNode *tree_sitter.N
 }
 
 func (gv *GoVisitor) handleFunctionDeclaration(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
+	funcName := ""
+	nameNode := gv.translate.TreeChildByKind(tsNode, "identifier")
+	if nameNode != nil {
+		funcName = gv.translate.GetTreeNodeName(nameNode)
+	}
 	paramsNode := gv.translate.TreeChildByFieldName(tsNode, "parameters")
 	bodyNode := gv.translate.TreeChildByFieldName(tsNode, "body")
 
-	return gv.translate.CreateFunction(ctx, scopeID, tsNode, gv.translate.NamedChildren(paramsNode), bodyNode)
+	return gv.translate.CreateFunction(ctx, scopeID, tsNode, funcName, gv.translate.NamedChildren(paramsNode), bodyNode)
+}
+
+func (gv *GoVisitor) createFakeClass(ctx context.Context, className string, fileID int32, scopeID ast.NodeID) *ast.Node {
+	classNode := ast.NewNode(
+		gv.translate.NextNodeID(), ast.NodeTypeClass, fileID,
+		className, base.Range{}, gv.translate.Version,
+		scopeID,
+	)
+	classNode.MetaData = map[string]any{
+		"is_fake": true,
+	}
+	gv.translate.CodeGraph.CreateClass(ctx, classNode)
+	return classNode
 }
 
 func (gv *GoVisitor) handleMethodDeclaration(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
-	receiverNode := gv.translate.TreeChildByFieldName(tsNode, "receiver")
-	paramsNode := gv.translate.TreeChildByFieldName(tsNode, "parameters")
-	bodyNode := gv.translate.TreeChildByFieldName(tsNode, "body")
+	nameNode := gv.translate.TreeChildByKind(tsNode, "field_identifier")
+	methodName := ""
+	if nameNode != nil {
+		methodName = gv.translate.GetTreeNodeName(nameNode)
+	}
+
+	paramLists := gv.translate.TreeChildrenByKind(tsNode, "parameter_list")
+
+	if len(paramLists) < 2 {
+		gv.logger.Warn("method_declaration missing parameter_list",
+			zap.Int("child_count", len(paramLists)),
+			zap.String("node_text", gv.translate.GetTreeNodeName(nameNode)),
+		)
+		return ast.InvalidNodeID
+	}
+
+	receiverNode := paramLists[0]
+	paramsNode := paramLists[1]
+
+	classNameNode := gv.translate.SubtreeNodeByKind(receiverNode, "type_identifier")
+	if classNameNode == nil {
+		gv.logger.Error("classNameNode is nil")
+		return ast.InvalidNodeID
+	}
+
+	className := gv.translate.GetTreeNodeName(classNameNode)
+	classNodes, err := gv.translate.CodeGraph.FindNodesByNameAndTypeInFile(ctx, className, ast.NodeTypeClass, gv.translate.FileID)
+	if err != nil {
+		gv.logger.Error("Error in find class for method",
+			zap.String("class_name", className),
+			zap.Int32("file_id", gv.translate.FileID),
+			zap.Error(err))
+		return ast.InvalidNodeID
+	}
+
+	classNode := &ast.Node{}
+	if len(classNodes) > 0 {
+		classNode = classNodes[0]
+	} else {
+		classNode = gv.createFakeClass(ctx, className, gv.translate.FileID, scopeID)
+	}
+
+	//receiverNode := gv.translate.TreeChildByFieldName(tsNode, "receiver")
+	//paramsNode := gv.translate.TreeChildByFieldName(tsNode, "parameters")
+	bodyNode := gv.translate.TreeChildByFieldName(tsNode, "block")
 
 	var allParams []*tree_sitter.Node
-	if receiverNode != nil {
-		allParams = append(allParams, gv.translate.NamedChildren(receiverNode)...)
-	}
 	if paramsNode != nil {
-		allParams = append(allParams, gv.translate.NamedChildren(paramsNode)...)
+		allParams = append(allParams,
+			gv.translate.TreeChildrenByKind(paramsNode, "parameter_declaration")...)
 	}
 
-	return gv.translate.CreateFunction(ctx, scopeID, tsNode, allParams, bodyNode)
+	functionId := gv.translate.CreateFunction(ctx, classNode.ID, tsNode, methodName, allParams, bodyNode)
+
+	// TODO: bad design. ideally this function should return the functionId. But that will end up adding functionID
+	// as a CONTAINS in the module.
+	if functionId != ast.InvalidNodeID {
+		gv.translate.CreateContainsRelation(ctx, classNode.ID, functionId, gv.translate.FileID)
+
+		thisParamDecl := gv.translate.TreeChildByKind(receiverNode, "parameter_declaration")
+		if thisParamDecl != nil {
+			thisNode := gv.translate.TreeChildByKind(thisParamDecl, "identifier")
+			if thisNode != nil {
+				// push scope to create "this" in function scope instead of higher scope
+				gv.translate.PushScope(false)
+				thisNodeId := gv.TraverseNode(ctx, thisNode, functionId)
+				if thisNodeId != ast.InvalidNodeID {
+					gv.translate.CodeGraph.MarkThis(ctx, gv.translate.FileID, thisNodeId, classNode.ID)
+				}
+				gv.translate.PopScope(ctx, functionId)
+			}
+		}
+	}
+	return ast.InvalidNodeID
 }
 
 func (gv *GoVisitor) handleMethodElem(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
+	methodName := ""
+	nameNode := gv.translate.TreeChildByKind(tsNode, "field_identifier")
+	if nameNode != nil {
+		methodName = gv.translate.GetTreeNodeName(nameNode)
+	}
 	paramList := gv.translate.TreeChildByKind(tsNode, "parameter_list")
 	params := []*tree_sitter.Node{}
 	if paramList != nil {
 		params = gv.translate.TreeChildrenByKind(paramList, "parameter_declaration")
 	}
 
-	return gv.translate.CreateFunction(ctx, scopeID, tsNode, params, nil)
+	return gv.translate.CreateFunction(ctx, scopeID, tsNode, methodName, params, nil)
 }
 
 func (gv *GoVisitor) handleTypeDeclaration(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
@@ -175,6 +260,13 @@ func (gv *GoVisitor) handleStructTypeSpec(ctx context.Context, tsNode *tree_sitt
 	}
 	fieldDecls := gv.translate.TreeChildrenByKind(fieldDeclList, "field_declaration")
 
+	typeId := gv.translate.TreeChildByKind(tsNode, "type_identifier")
+
+	clsName := ""
+	if typeId != nil {
+		clsName = gv.translate.GetTreeNodeName(typeId)
+	}
+
 	/*
 		var fields []*tree_sitter.Node
 		if fieldDecls != nil {
@@ -182,14 +274,19 @@ func (gv *GoVisitor) handleStructTypeSpec(ctx context.Context, tsNode *tree_sitt
 			fields = append(fields, field)
 		}
 	*/
-	return gv.translate.HandleClass(ctx, scopeID, tsNode, nil, fieldDecls)
+	return gv.translate.HandleClass(ctx, scopeID, tsNode, clsName, nil, fieldDecls)
 }
 
 func (gv *GoVisitor) handleInterfaceType(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
 	interfaceType := gv.translate.TreeChildByKind(tsNode, "interface_type")
 	methods := gv.translate.TreeChildrenByKind(interfaceType, "method_elem")
+	typeId := gv.translate.TreeChildByKind(tsNode, "type_identifier")
+	clsName := ""
+	if typeId != nil {
+		clsName = gv.translate.GetTreeNodeName(typeId)
+	}
 
-	return gv.translate.HandleClass(ctx, scopeID, tsNode, methods, nil)
+	return gv.translate.HandleClass(ctx, scopeID, tsNode, clsName, methods, nil)
 }
 
 func (gv *GoVisitor) handleReturnStatement(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {

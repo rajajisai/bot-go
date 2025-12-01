@@ -38,6 +38,40 @@ type FileParser struct {
 	Config    *config.Config
 }
 
+func (lt LanguageType) String() string {
+	switch lt {
+	case Go:
+		return "go"
+	case JavaScript:
+		return "javascript"
+	case TypeScript:
+		return "typescript"
+	case Python:
+		return "python"
+	case Java:
+		return "java"
+	default:
+		return "unknown"
+	}
+}
+
+func NewLanguageTypeFromString(lang string) LanguageType {
+	switch strings.ToLower(lang) {
+	case "go":
+		return Go
+	case "javascript":
+		return JavaScript
+	case "typescript":
+		return TypeScript
+	case "python":
+		return Python
+	case "java":
+		return Java
+	default:
+		return Unknown
+	}
+}
+
 func NewFileParser(logger *zap.Logger, cg *codegraph.CodeGraph, cfg *config.Config) *FileParser {
 	return &FileParser{
 		parser:    tree_sitter.NewParser(),
@@ -203,6 +237,7 @@ func (fp *FileParser) ParseAndTraverseWithContent(ctx context.Context, repo *con
 		"repo":     repo.Name,
 		"path":     fp.relativePath(repo, filePath),
 		"modified": info.ModTime().Unix(),
+		"language": languageType.String(),
 	}
 
 	fp.CodeGraph.CreateFileScope(ctx, fileScope)

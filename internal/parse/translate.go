@@ -247,6 +247,24 @@ func (t *TranslateFromSyntaxTree) TreeChildByFieldName(node *tree_sitter.Node, f
 	return nil
 }
 
+func (t *TranslateFromSyntaxTree) SubtreeNodeByKind(node *tree_sitter.Node, kind string) *tree_sitter.Node {
+	if node == nil {
+		return nil
+	}
+	for i := uint(0); i < node.ChildCount(); i++ {
+		child := node.Child(i)
+		childKind := child.Kind()
+		if childKind == kind {
+			return child
+		}
+		result := t.SubtreeNodeByKind(child, kind)
+		if result != nil {
+			return result
+		}
+	}
+	return nil
+}
+
 func (t *TranslateFromSyntaxTree) String(node *tree_sitter.Node) string {
 	if node == nil {
 		return ""
@@ -356,12 +374,22 @@ func (t *TranslateFromSyntaxTree) CreateContainsRelation(ctx context.Context, pa
 
 func (t *TranslateFromSyntaxTree) CreateContainsRelations(ctx context.Context, parentID ast.NodeID, childIDs []ast.NodeID) {
 	for _, childID := range childIDs {
+		if childID == ast.InvalidNodeID {
+			continue
+		}
 		t.CreateContainsRelation(ctx, parentID, childID, t.FileID)
 	}
 }
 
-func (t *TranslateFromSyntaxTree) CreateFunction(ctx context.Context, scopeID ast.NodeID, fn *tree_sitter.Node, params []*tree_sitter.Node, body *tree_sitter.Node) ast.NodeID {
-	funcName := t.GetTreeNodeName(fn)
+func (t *TranslateFromSyntaxTree) CreateFunction(ctx context.Context,
+	scopeID ast.NodeID,
+	fn *tree_sitter.Node,
+	fnName string,
+	params []*tree_sitter.Node, body *tree_sitter.Node) ast.NodeID {
+	funcName := fnName
+	if funcName == "" {
+		funcName = t.GetTreeNodeName(fn)
+	}
 	if funcName == "" {
 		return ast.InvalidNodeID
 	}
@@ -496,9 +524,13 @@ func (t *TranslateFromSyntaxTree) ResolveNameChain(ctx context.Context, nameChai
 func (t *TranslateFromSyntaxTree) HandleClass(ctx context.Context,
 	scopeID ast.NodeID,
 	cls *tree_sitter.Node,
+	name string,
 	methods []*tree_sitter.Node,
 	fields []*tree_sitter.Node) ast.NodeID {
-	className := t.GetTreeNodeName(cls)
+	className := name
+	if className == "" {
+		className = t.GetTreeNodeName(cls)
+	}
 	if className == "" {
 		return ast.InvalidNodeID
 	}

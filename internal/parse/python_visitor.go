@@ -90,7 +90,7 @@ func (pv *PythonVisitor) handleFunctionDefinition(ctx context.Context, tsNode *t
 	paramsNode := pv.translate.TreeChildByFieldName(tsNode, "parameters")
 	bodyNode := pv.translate.TreeChildByFieldName(tsNode, "body")
 
-	return pv.translate.CreateFunction(ctx, scopeID, tsNode, pv.translate.NamedChildren(paramsNode), bodyNode)
+	return pv.translate.CreateFunction(ctx, scopeID, tsNode, "", pv.translate.NamedChildren(paramsNode), bodyNode)
 }
 
 func (pv *PythonVisitor) handleClassDefinition(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {
@@ -99,7 +99,7 @@ func (pv *PythonVisitor) handleClassDefinition(ctx context.Context, tsNode *tree
 	if body != nil {
 		methods = pv.translate.TreeChildrenByKind(body, "function_definition")
 	}
-	return pv.translate.HandleClass(ctx, scopeID, tsNode, methods, nil)
+	return pv.translate.HandleClass(ctx, scopeID, tsNode, "", methods, nil)
 }
 
 func (pv *PythonVisitor) handleReturnStatement(ctx context.Context, tsNode *tree_sitter.Node, scopeID ast.NodeID) ast.NodeID {

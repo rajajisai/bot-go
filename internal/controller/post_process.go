@@ -1,16 +1,16 @@
 package controller
 
 import (
-	"bot-go/internal/service/codegraph"
-	"context"
-	"fmt"
-
 	"bot-go/internal/config"
 	"bot-go/internal/model"
 	"bot-go/internal/model/ast"
+	"bot-go/internal/parse"
+	"bot-go/internal/service/codegraph"
 	"bot-go/internal/util"
 	"bot-go/pkg/lsp"
 	"bot-go/pkg/lsp/base"
+	"context"
+	"fmt"
 
 	"go.uber.org/zap"
 )
@@ -27,6 +27,10 @@ func NewPostProcessor(codeGraph *codegraph.CodeGraph, lspService *lsp.LspService
 		lspService: lspService,
 		logger:     logger,
 	}
+}
+
+func (pp *PostProcessor) ProcessFakeClasses(ctx context.Context, fileScope *ast.Node) error {
+	return pp.codeGraph.UpdateFakeClasses(ctx, fileScope.FileID)
 }
 
 func (pp *PostProcessor) PostProcessRepository(ctx context.Context, repo *config.Repository) error {
@@ -56,6 +60,14 @@ func (pp *PostProcessor) PostProcessRepository(ctx context.Context, repo *config
 }
 
 func (pp *PostProcessor) processOneFile(ctx context.Context, repo *config.Repository, fileScope *ast.Node) error {
+	language := fileScope.MetaData["language"].(string)
+	langType := parse.NewLanguageTypeFromString(language)
+	if langType == parse.Go {
+		if err := pp.ProcessFakeClasses(ctx, fileScope); err != nil {
+			pp.logger.Error("Failed to process fake classes", zap.Error(err))
+		}
+	}
+
 	if err := pp.processFunctionCalls(ctx, repo, fileScope); err != nil {
 		return fmt.Errorf("failed to process function calls: %w", err)
 	}
