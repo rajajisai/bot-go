@@ -231,7 +231,7 @@ func (c *BaseClient) writeMessage(msg *base.JSONRPCMessage) error {
 		c.logger.Error("Failed to marshal JSON-RPC message", zap.Error(err))
 		return err
 	}
-	c.logger.Info("Marshalled LSP message raw", zap.String("data", string(data)))
+	c.logger.Debug("Marshalled LSP message raw", zap.String("data", string(data)))
 
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
 	c.logger.Debug("Writing LSP message", zap.String("method", msg.Method), zap.Int("content_length", len(data)))
