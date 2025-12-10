@@ -27,10 +27,6 @@ COPY --from=builder /build/bot-go .
 COPY --from=builder /build/config ./config
 COPY --from=builder /build/scripts ./scripts
 
-# Copy Kuzu shared library 
-COPY --from=builder /go/pkg/mod/github.com/kuzudb/go-kuzu@v0.11.2/lib/dynamic/linux-arm64/libkuzu.so /usr/local/lib/libkuzu.so
-RUN ldconfig
-
 # Create directory for logs
 RUN mkdir -p /app/logs
 RUN mkdir -p /app/data

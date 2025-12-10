@@ -16,23 +16,9 @@
       },
       "language": "go",
       "description": "LLM integration with retry logic, prompt building, and response parsing for AI-based code analysis"
-    },
-    {
-      "file": "snippet_graph_db_query.go",
-      "original_location": {
-        "repo": "bot-go",
-        "file_path": "internal/service/kuzu_db.go",
-        "start_line": 346,
-        "end_line": 380,
-        "function_name": "handleFileNumberMerge"
-      },
-      "language": "go",
-      "description": "Graph database atomic increment operation using Cypher queries for state management"
     }
   ],
   "similar_pairs": [],
-  "different_pairs": [
-    ["snippet_llm_integration.go", "snippet_graph_db_query.go"]
-  ],
-  "notes": "Completely different domains: External AI service integration with natural language prompts vs local graph database queries with Cypher. One deals with retry logic and text parsing, the other with atomic operations and type conversions."
+  "different_pairs": [],
+  "notes": "LLM integration example showing external AI service integration with natural language prompts, retry logic and text parsing."
 }

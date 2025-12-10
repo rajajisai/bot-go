@@ -44,10 +44,6 @@ type Neo4jConfig struct {
 	Password string `yaml:"password"`
 }
 
-type KuzuConfig struct {
-	Path string `yaml:"path"`
-}
-
 type QdrantConfig struct {
 	Host   string `yaml:"host"`
 	Port   int    `yaml:"port"`
@@ -116,7 +112,6 @@ type Config struct {
 	Source        SourceConfig        `yaml:"source"`
 	Mcp           McpConfig           `yaml:"mcp"`
 	Neo4j         Neo4jConfig         `yaml:"neo4j"`
-	Kuzu          KuzuConfig          `yaml:"kuzu"`
 	Qdrant        QdrantConfig        `yaml:"qdrant"`
 	Chunking      ChunkingConfig      `yaml:"chunking"`
 	Ollama        OllamaConfig        `yaml:"ollama"`
@@ -212,10 +207,6 @@ func LoadConfig(appConfigPath string, sourceConfigPath string) (*Config, error) 
 
 	if configSource.Neo4j.URI != "" {
 		configApp.Neo4j = configSource.Neo4j
-	}
-
-	if configSource.Kuzu.Path != "" {
-		configApp.Kuzu = configSource.Kuzu
 	}
 
 	if configSource.Qdrant.Host != "" {

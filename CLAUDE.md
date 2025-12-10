@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Bot-Go is a GoLang service that analyzes source code repositories using multiple approaches:
 - **Language Server Protocol (LSP)**: Integrates with language servers (gopls, pylsp, typescript-language-server) for real-time code intelligence
 - **Tree-sitter parsing**: Direct AST parsing of code files into a graph database representation
-- **Graph database storage**: Stores code structure as a graph using either Neo4j or Kuzu
+- **Graph database storage**: Stores code structure as a graph using Neo4j
 - **MCP server**: Exposes code analysis tools via Model Context Protocol for AI assistants
 - **Hierarchical Code Chunking**: Chunks code into hierarchical pieces with vector embeddings for semantic search (NEW)
 
@@ -77,7 +77,7 @@ The service uses two separate YAML configuration files:
 - Server ports (app.port, mcp.port)
 - CodeGraph enable/disable flag
 - Paths to language server executables (gopls, python)
-- Database connection (neo4j.uri, kuzu.path)
+- Database connection (neo4j.uri)
 - Working directory for temporary files
 
 ### source.yaml - Repository definitions
@@ -100,7 +100,7 @@ Configuration loading: `config.LoadConfig(appConfigPath, sourceConfigPath)` merg
 2. **CodeGraph Processing** (when enabled):
    - `RepoProcessor` walks repository files and parses them using tree-sitter
    - Visitors (GoVisitor, PythonVisitor, JavaScriptVisitor) convert syntax trees to AST nodes
-   - AST nodes are stored in graph database (Neo4j or Kuzu)
+   - AST nodes are stored in graph database (Neo4j)
    - `PostProcessor` enriches function call relationships using LSP
 
 3. **LSP Integration**:
@@ -111,9 +111,9 @@ Configuration loading: `config.LoadConfig(appConfigPath, sourceConfigPath)` merg
 ### Key Components
 
 **internal/service/graph_db.go**:
-- `GraphDatabase` interface abstracts Neo4j and Kuzu implementations
-- Both databases support Cypher-like queries
-- Implementations in `neo4j_db.go` and `kuzu_db.go`
+- `GraphDatabase` interface abstracts graph database implementations
+- Uses Cypher queries
+- Implementation in `neo4j_db.go`
 
 **internal/db/mysql.go & file_version.go**:
 - MySQL database for tracking file versions and processing status
@@ -242,10 +242,9 @@ MCP Server (port from app.yaml mcp.port, default 8282):
 ## Important Patterns
 
 ### Graph Database Abstraction
-The codebase supports both Neo4j and Kuzu via a unified interface. Key differences:
+The codebase uses Neo4j via a unified interface:
 - Neo4j: Production-ready, requires separate server
-- Kuzu: Embedded database, can use `:memory:` or file path
-- Both use Cypher queries, with slight dialect differences
+- Uses Cypher queries
 - Type conversions (int32/int64) are handled in `convertToInt64()` and `convertToInt32()`
 
 ### LSP Client Pattern
@@ -279,7 +278,6 @@ The codebase supports both Neo4j and Kuzu via a unified interface. Key differenc
 - **go.uber.org/zap**: Structured logging
 - **github.com/tree-sitter/go-tree-sitter**: AST parsing
 - **github.com/neo4j/neo4j-go-driver/v5**: Neo4j client
-- **github.com/kuzudb/go-kuzu**: Kuzu embedded graph DB
 - **github.com/modelcontextprotocol/go-sdk**: MCP protocol implementation
 - **gopkg.in/yaml.v2**: YAML configuration
 
@@ -294,8 +292,7 @@ Verify LSP connection:
 - Check configured paths in app.yaml (gopls, python)
 
 Inspect graph database:
-- Neo4j: Use browser at http://localhost:7687
-- Kuzu: Query via code, or use CLI tool
+- Neo4j: Use browser at http://localhost:7474
 - Node labels: FileScope, Function, Class, Variable, Block, etc.
 
 Test MCP tools:

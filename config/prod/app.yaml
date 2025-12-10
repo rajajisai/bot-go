@@ -10,5 +10,3 @@ neo4j:
   uri: "bolt://host.docker.internal:7687"
   username: ""
   password: ""
-kuzu:
-  path: "/app/data/kuzu.db"

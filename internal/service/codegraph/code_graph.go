@@ -60,44 +60,6 @@ func NewCodeGraph(uri, username, password string, config *config.Config, logger 
 	}, nil
 }
 
-// NewCodeGraphWithKuzu creates a new CodeGraph instance using Kuzu database
-func NewCodeGraphWithKuzu(config *config.Config, logger *zap.Logger) (*CodeGraph, error) {
-	// Use the database path from config, fallback to in-memory if not specified
-	databasePath := config.Kuzu.Path
-	if databasePath == "" {
-		databasePath = ":memory:"
-		logger.Info("No Kuzu database path configured, using in-memory database")
-	}
-
-	db, err := NewKuzuDatabase(databasePath, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kuzu database: %w", err)
-	}
-
-	err = db.VerifyConnectivity(context.Background())
-	if err != nil {
-		db.Close(context.Background())
-		return nil, fmt.Errorf("failed to verify database connectivity: %w", err)
-	}
-
-	// Initialize batch writing configuration
-	enableBatch := config.CodeGraph.EnableBatchWrites
-	batchSize := config.CodeGraph.BatchSize
-	if batchSize == 0 {
-		batchSize = 100 // default
-	}
-
-	return &CodeGraph{
-		db:                db,
-		config:            config,
-		logger:            logger,
-		fileIDCache:       make(map[int32]string),
-		enableBatchWrites: enableBatch,
-		batchSize:         batchSize,
-		buffers:           make(map[int32]*Buffer),
-	}, nil
-}
-
 func (cg *CodeGraph) Close(ctx context.Context) error {
 	return cg.db.Close(ctx)
 }

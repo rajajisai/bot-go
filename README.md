@@ -3,7 +3,7 @@
 A GoLang service for analyzing source code repositories using multiple approaches:
 - **Language Server Protocol (LSP)**: Real-time code intelligence via language servers (gopls, pylsp, typescript-language-server)
 - **Tree-sitter parsing**: Direct AST parsing into graph database representation
-- **Graph database storage**: Code structure stored as a graph (Neo4j or Kuzu)
+- **Graph database storage**: Code structure stored as a graph (Neo4j)
 - **Hierarchical code chunking**: Vector embeddings for semantic code search (Qdrant + Ollama)
 - **MCP server**: Model Context Protocol server for AI assistants
 
@@ -65,13 +65,11 @@ app:
   python: "${BOT_GO_PATH}/scripts/pylsp.sh"     # Path to pylsp wrapper
   num_file_threads: 2     # Concurrent file processing threads
 
-# Graph database (choose one)
+# Graph database
 neo4j:
   uri: "bolt://localhost:7687"
   username: ""
   password: ""
-kuzu:
-  path: "data/kuzu.db"    # Embedded database path (or ":memory:")
 
 # Vector search (optional)
 qdrant:
@@ -170,7 +168,7 @@ make docker-stop
 **Docker notes**:
 - Exposes ports 8181 (REST API) and 8282 (MCP server)
 - Mounts `config/` directory for configuration
-- Mounts `data/` for Kuzu database persistence
+- Mounts `data/` for database persistence
 - Mounts `logs/` for application logs
 - Includes file descriptor limit increase for large repos
 
@@ -463,7 +461,6 @@ bot-go/
 │   │   ├── code_graph.go       # Graph database API
 │   │   ├── graph_db.go         # Graph DB interface
 │   │   ├── neo4j_db.go         # Neo4j implementation
-│   │   ├── kuzu_db.go          # Kuzu implementation
 │   │   ├── vector_db.go        # Vector DB interface
 │   │   ├── qdrant_db.go        # Qdrant implementation
 │   │   ├── embedding.go        # Embedding interface
@@ -501,7 +498,7 @@ bot-go/
 
 ### Key Design Patterns
 
-**Graph Database Abstraction**: Both Neo4j and Kuzu supported via unified interface with Cypher queries
+**Graph Database Abstraction**: Neo4j supported via unified interface with Cypher queries
 
 **LSP Client Pattern**: Base client handles JSON-RPC, language-specific clients extend with custom initialization
 
@@ -517,7 +514,6 @@ bot-go/
 - **go.uber.org/zap** - Structured logging
 - **github.com/tree-sitter/go-tree-sitter** - AST parsing
 - **github.com/neo4j/neo4j-go-driver/v5** - Neo4j client
-- **github.com/kuzudb/go-kuzu** - Kuzu embedded graph DB
 - **github.com/qdrant/go-client** - Qdrant vector DB
 - **github.com/modelcontextprotocol/go-sdk** - MCP protocol
 - **gopkg.in/yaml.v2** - YAML configuration
