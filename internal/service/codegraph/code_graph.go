@@ -1,10 +1,14 @@
 package codegraph
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"bot-go/internal/config"
 	"bot-go/internal/model/ast"
@@ -1908,4 +1912,208 @@ func (cg *CodeGraph) GetFieldsWrittenByMethod(ctx context.Context, methodID ast.
 		RETURN DISTINCT f
 	`
 	return cg.readNodesByQuery(ctx, "f", query, map[string]any{"methodId": int64(methodID)})
+}
+
+// DumpToFile dumps the code graph for the specified repositories to a file.
+// FileScopes are output in alphabetical order by their path.
+// For each FileScope, all nodes and relations within that file are dumped.
+func (cg *CodeGraph) DumpToFile(ctx context.Context, filePath string, repoNames []string) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to create dump file: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	fmt.Fprintf(writer, "# Code Graph Dump\n")
+	fmt.Fprintf(writer, "# Repositories: %s\n", strings.Join(repoNames, ", "))
+	fmt.Fprintf(writer, "# Generated at: %s\n\n", time.Now().Format(time.RFC3339))
+
+	// For each repository
+	for _, repoName := range repoNames {
+		fmt.Fprintf(writer, "================================================================================\n")
+		fmt.Fprintf(writer, "REPOSITORY: %s\n", repoName)
+		fmt.Fprintf(writer, "================================================================================\n\n")
+
+		// Get all FileScopes for this repository
+		fileScopes, err := cg.FindFileScopes(ctx, repoName, "")
+		if err != nil {
+			cg.logger.Error("Failed to find file scopes", zap.String("repo", repoName), zap.Error(err))
+			fmt.Fprintf(writer, "ERROR: Failed to find file scopes: %v\n\n", err)
+			continue
+		}
+
+		if len(fileScopes) == 0 {
+			fmt.Fprintf(writer, "No file scopes found for repository.\n\n")
+			continue
+		}
+
+		// Sort FileScopes by path alphabetically
+		sort.Slice(fileScopes, func(i, j int) bool {
+			pathI := ""
+			pathJ := ""
+			if fileScopes[i].MetaData != nil {
+				if p, ok := fileScopes[i].MetaData["path"].(string); ok {
+					pathI = p
+				}
+			}
+			if fileScopes[j].MetaData != nil {
+				if p, ok := fileScopes[j].MetaData["path"].(string); ok {
+					pathJ = p
+				}
+			}
+			return pathI < pathJ
+		})
+
+		fmt.Fprintf(writer, "Total files: %d\n\n", len(fileScopes))
+
+		// For each FileScope, dump all nodes and relations
+		for _, fs := range fileScopes {
+			filePath := ""
+			if fs.MetaData != nil {
+				if p, ok := fs.MetaData["path"].(string); ok {
+					filePath = p
+				}
+			}
+
+			fmt.Fprintf(writer, "--------------------------------------------------------------------------------\n")
+			fmt.Fprintf(writer, "FILE: %s (FileID: %d)\n", filePath, fs.FileID)
+			fmt.Fprintf(writer, "--------------------------------------------------------------------------------\n\n")
+
+			// Dump the FileScope node itself
+			fmt.Fprintf(writer, "## Nodes\n\n")
+			cg.writeNodeToFile(writer, fs, 0)
+
+			// Get all nodes in this file
+			nodesInFile, err := cg.getAllNodesInFile(ctx, fs.FileID)
+			if err != nil {
+				cg.logger.Error("Failed to get nodes in file", zap.Int32("fileId", fs.FileID), zap.Error(err))
+				fmt.Fprintf(writer, "ERROR: Failed to get nodes: %v\n\n", err)
+				continue
+			}
+
+			// Sort nodes by ID for consistent output
+			sort.Slice(nodesInFile, func(i, j int) bool {
+				return nodesInFile[i].ID < nodesInFile[j].ID
+			})
+
+			for _, node := range nodesInFile {
+				cg.writeNodeToFile(writer, node, 1)
+			}
+
+			// Get all relations for this file
+			fmt.Fprintf(writer, "\n## Relations\n\n")
+			relations, err := cg.getAllRelationsInFile(ctx, fs.FileID)
+			if err != nil {
+				cg.logger.Error("Failed to get relations in file", zap.Int32("fileId", fs.FileID), zap.Error(err))
+				fmt.Fprintf(writer, "ERROR: Failed to get relations: %v\n\n", err)
+				continue
+			}
+
+			// Sort relations for consistent output
+			sort.Slice(relations, func(i, j int) bool {
+				if relations[i].fromID != relations[j].fromID {
+					return relations[i].fromID < relations[j].fromID
+				}
+				if relations[i].relType != relations[j].relType {
+					return relations[i].relType < relations[j].relType
+				}
+				return relations[i].toID < relations[j].toID
+			})
+
+			for _, rel := range relations {
+				fmt.Fprintf(writer, "  (%d) -[%s]-> (%d)\n", rel.fromID, rel.relType, rel.toID)
+			}
+
+			fmt.Fprintf(writer, "\nTotal nodes in file: %d\n", len(nodesInFile)+1) // +1 for FileScope
+			fmt.Fprintf(writer, "Total relations in file: %d\n\n", len(relations))
+		}
+	}
+
+	return nil
+}
+
+// relationInfo holds information about a relationship for dumping
+type relationInfo struct {
+	fromID  int64
+	toID    int64
+	relType string
+}
+
+// writeNodeToFile writes a single node to the dump file
+func (cg *CodeGraph) writeNodeToFile(writer *bufio.Writer, node *ast.Node, indent int) {
+	indentStr := strings.Repeat("  ", indent)
+	nodeTypeName := cg.getNodeLabel(node.NodeType)
+
+	fmt.Fprintf(writer, "%s[%s] ID:%d Name:%q Range:%s\n",
+		indentStr, nodeTypeName, node.ID, node.Name, rangeToString(node.Range))
+
+	// Print metadata if present
+	if node.MetaData != nil && len(node.MetaData) > 0 {
+		// Sort metadata keys for consistent output
+		keys := make([]string, 0, len(node.MetaData))
+		for k := range node.MetaData {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			v := node.MetaData[k]
+			fmt.Fprintf(writer, "%s    %s: %v\n", indentStr, k, v)
+		}
+	}
+}
+
+// getAllNodesInFile retrieves all nodes (except FileScope) that belong to a specific file
+func (cg *CodeGraph) getAllNodesInFile(ctx context.Context, fileID int32) ([]*ast.Node, error) {
+	// Query all node types except FileScope and FileNumber
+	query := `
+		MATCH (n)
+		WHERE n.fileId = $fileId
+		  AND n.nodeType <> $fileScopeType
+		  AND n.nodeType <> $fileNumberType
+		RETURN n
+	`
+	params := map[string]any{
+		"fileId":         int64(fileID),
+		"fileScopeType":  int64(ast.NodeTypeFileScope),
+		"fileNumberType": int64(ast.NodeTypeFileNumber),
+	}
+
+	return cg.readNodesByQuery(ctx, "n", query, params)
+}
+
+// getAllRelationsInFile retrieves all relationships where either the source or target is in the file
+func (cg *CodeGraph) getAllRelationsInFile(ctx context.Context, fileID int32) ([]relationInfo, error) {
+	query := `
+		MATCH (from)-[r]->(to)
+		WHERE from.fileId = $fileId OR to.fileId = $fileId
+		RETURN from.id as fromId, type(r) as relType, to.id as toId
+	`
+	params := map[string]any{
+		"fileId": int64(fileID),
+	}
+
+	records, err := cg.db.ExecuteRead(ctx, query, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get relations: %w", err)
+	}
+
+	var relations []relationInfo
+	for _, record := range records {
+		fromID := cg.convertToInt64(record["fromId"])
+		toID := cg.convertToInt64(record["toId"])
+		relType, _ := record["relType"].(string)
+
+		relations = append(relations, relationInfo{
+			fromID:  fromID,
+			toID:    toID,
+			relType: relType,
+		})
+	}
+
+	return relations, nil
 }

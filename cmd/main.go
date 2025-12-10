@@ -42,6 +42,7 @@ func main() {
 	var buildIndex stringSliceFlag
 	flag.Var(&buildIndex, "build-index", "Repository name to build index for (can be specified multiple times)")
 	var useHead = flag.Bool("head", false, "Use git HEAD version instead of working directory (only valid with --build-index)")
+	var testDump = flag.String("test-dump", "", "Path to output file for dumping code graph after index building (only valid with --build-index)")
 	flag.Parse()
 
 	//logger, err := zap.NewProduction()
@@ -77,8 +78,13 @@ func main() {
 	// Check if we're in CLI mode (build-index specified)
 	if len(buildIndex) > 0 {
 		logger.Info("Running in CLI mode - build-index")
-		BuildIndexCommand(cfg, logger, buildIndex, *useHead)
+		BuildIndexCommand(cfg, logger, buildIndex, *useHead, *testDump)
 		return
+	}
+
+	// Validate --test-dump flag usage
+	if *testDump != "" {
+		logger.Fatal("--test-dump flag is only valid with --build-index")
 	}
 
 	// Validate --head flag usage
@@ -139,12 +145,13 @@ func LSPTest(cfg *config.Config, logger *zap.Logger) {
 	baseClient.TestCommand(ctx)
 }
 
-func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []string, useHead bool) {
+func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []string, useHead bool, testDumpPath string) {
 	ctx := context.Background()
 
 	logger.Info("Build index command started",
 		zap.Strings("repositories", repoNames),
 		zap.Bool("use_head", useHead),
+		zap.String("test_dump_path", testDumpPath),
 		zap.Bool("code_graph_enabled", cfg.IndexBuilding.EnableCodeGraph),
 		zap.Bool("embeddings_enabled", cfg.IndexBuilding.EnableEmbeddings),
 		zap.Bool("ngram_enabled", cfg.IndexBuilding.EnableNgram))
@@ -223,6 +230,18 @@ func BuildIndexCommand(cfg *config.Config, logger *zap.Logger, repoNames []strin
 
 		logger.Info("Completed index building for repository",
 			zap.String("repo_name", repo.Name))
+	}
+
+	// If test-dump is specified, dump the code graph after all processing is complete
+	if testDumpPath != "" && container.CodeGraph != nil {
+		logger.Info("Dumping code graph to file", zap.String("path", testDumpPath))
+		if err := container.CodeGraph.DumpToFile(ctx, testDumpPath, repoNames); err != nil {
+			logger.Error("Failed to dump code graph", zap.Error(err))
+		} else {
+			logger.Info("Code graph dumped successfully", zap.String("path", testDumpPath))
+		}
+	} else if testDumpPath != "" && container.CodeGraph == nil {
+		logger.Warn("Cannot dump code graph: CodeGraph is not enabled")
 	}
 
 	logger.Info("Build index command completed")
