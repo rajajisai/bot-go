@@ -1710,6 +1710,95 @@ func (t *CodeGraph) MarkThis(ctx context.Context, fileID int32, thisNodeId ast.N
 	_ = t.CreateRelation(ctx, thisNodeId, classNodeId, "THIS", nil, fileID)
 }
 
+// GetMethodsOfClass returns all methods (functions) contained by a class
+func (cg *CodeGraph) GetMethodsOfClass(ctx context.Context, classID ast.NodeID) ([]*ast.Node, error) {
+	query := `
+		MATCH (c:Class {id: $classId})-[:CONTAINS]->(m:Function)
+		RETURN m
+	`
+	return cg.readNodesByQuery(ctx, "m", query, map[string]any{"classId": int64(classID)})
+}
+
+// GetFieldsOfClass returns all fields contained by a class
+func (cg *CodeGraph) GetFieldsOfClass(ctx context.Context, classID ast.NodeID) ([]*ast.Node, error) {
+	query := `
+		MATCH (c:Class {id: $classId})-[:CONTAINS]->(f:Field)
+		RETURN f
+	`
+	return cg.readNodesByQuery(ctx, "f", query, map[string]any{"classId": int64(classID)})
+}
+
+// GetFieldsAccessedByMethod returns all Field nodes contained within a method (directly or nested)
+func (cg *CodeGraph) GetFieldsAccessedByMethod(ctx context.Context, methodID ast.NodeID) ([]*ast.Node, error) {
+	query := `
+		MATCH (m:Function {id: $methodId})-[:CONTAINS*]->(f:Field)
+		RETURN DISTINCT f
+	`
+	return cg.readNodesByQuery(ctx, "f", query, map[string]any{"methodId": int64(methodID)})
+}
+
+// GetFieldsAccessedViaThis returns fields accessed through the "this" receiver in a method
+// Pattern: (method)-[:CONTAINS*]->(thisVar)-[:THIS]->(class), (thisVar)-[:HAS_FIELD*]->(field)
+func (cg *CodeGraph) GetFieldsAccessedViaThis(ctx context.Context, methodID ast.NodeID) ([]*ast.Node, error) {
+	query := `
+		MATCH (m:Function {id: $methodId})-[:CONTAINS*]->(thisVar)-[:THIS]->(c:Class)
+		MATCH (thisVar)-[:HAS_FIELD*]->(f:Field)
+		RETURN DISTINCT f
+	`
+	return cg.readNodesByQuery(ctx, "f", query, map[string]any{"methodId": int64(methodID)})
+}
+
+// GetThisClassForMethod returns the class that the method's receiver (this) points to
+func (cg *CodeGraph) GetThisClassForMethod(ctx context.Context, methodID ast.NodeID) (*ast.Node, error) {
+	query := `
+		MATCH (m:Function {id: $methodId})-[:CONTAINS*]->(thisVar)-[:THIS]->(c:Class)
+		RETURN c
+		LIMIT 1
+	`
+	nodes, err := cg.readNodesByQuery(ctx, "c", query, map[string]any{"methodId": int64(methodID)})
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	return nodes[0], nil
+}
+
+// GetContainingClass returns the class that contains a method
+func (cg *CodeGraph) GetContainingClass(ctx context.Context, methodID ast.NodeID) (*ast.Node, error) {
+	query := `
+		MATCH (c:Class)-[:CONTAINS]->(m:Function {id: $methodId})
+		RETURN c
+		LIMIT 1
+	`
+	nodes, err := cg.readNodesByQuery(ctx, "c", query, map[string]any{"methodId": int64(methodID)})
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	return nodes[0], nil
+}
+
+// GetFieldOwnerClass returns the class that owns a field
+func (cg *CodeGraph) GetFieldOwnerClass(ctx context.Context, fieldID ast.NodeID) (*ast.Node, error) {
+	query := `
+		MATCH (c:Class)-[:CONTAINS]->(f:Field {id: $fieldId})
+		RETURN c
+		LIMIT 1
+	`
+	nodes, err := cg.readNodesByQuery(ctx, "c", query, map[string]any{"fieldId": int64(fieldID)})
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	return nodes[0], nil
+}
+
 func (cg *CodeGraph) GetModuleName(ctx context.Context, fileId int32) (string, error) {
 	// Query the database (either batch mode disabled, or module not in buffer)
 	query := `
@@ -1820,4 +1909,41 @@ func (cg *CodeGraph) UpdateFakeClasses(ctx context.Context, fileID int32) error 
 		}
 	}
 	return nil
+}
+
+// IsFieldWrittenInMethod checks if a field has an incoming DATA_FLOW relationship
+// within the scope of a method, indicating the field is being written to
+func (cg *CodeGraph) IsFieldWrittenInMethod(ctx context.Context, methodID ast.NodeID, fieldID ast.NodeID) (bool, error) {
+	// Check if there's a DATA_FLOW relationship targeting this field
+	// within the method's scope
+	query := `
+		MATCH (m:Function {id: $methodId})-[:CONTAINS*]->(source)-[:DATA_FLOW]->(f:Field {id: $fieldId})
+		RETURN count(f) > 0 AS isWritten
+	`
+	parameters := map[string]any{
+		"methodId": int64(methodID),
+		"fieldId":  int64(fieldID),
+	}
+
+	results, err := cg.db.ExecuteRead(ctx, query, parameters)
+	if err != nil {
+		return false, fmt.Errorf("failed to check field write: %w", err)
+	}
+
+	if len(results) > 0 && results[0]["isWritten"] != nil {
+		if isWritten, ok := results[0]["isWritten"].(bool); ok {
+			return isWritten, nil
+		}
+	}
+	return false, nil
+}
+
+// GetFieldsWrittenByMethod returns all fields that are written to within a method
+// (fields that are targets of DATA_FLOW relationships)
+func (cg *CodeGraph) GetFieldsWrittenByMethod(ctx context.Context, methodID ast.NodeID) ([]*ast.Node, error) {
+	query := `
+		MATCH (m:Function {id: $methodId})-[:CONTAINS*]->(source)-[:DATA_FLOW]->(f:Field)
+		RETURN DISTINCT f
+	`
+	return cg.readNodesByQuery(ctx, "f", query, map[string]any{"methodId": int64(methodID)})
 }
