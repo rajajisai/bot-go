@@ -11,15 +11,13 @@ The Code Graph is the core data structure in bot-go that represents source code 
 │                        CodeGraph                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                   GraphDatabase                          │   │
-│  │         (Neo4j or Kuzu implementation)                   │   │
+│  │              (Neo4j implementation)                      │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                              │                                   │
-│              ┌───────────────┴───────────────┐                  │
-│              ▼                               ▼                  │
-│     ┌─────────────┐                 ┌─────────────┐            │
-│     │   Neo4j DB  │                 │   Kuzu DB   │            │
-│     │  (External) │                 │ (Embedded)  │            │
-│     └─────────────┘                 └─────────────┘            │
+│                              ▼                                   │
+│                     ┌─────────────┐                             │
+│                     │   Neo4j DB  │                             │
+│                     └─────────────┘                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -32,7 +30,6 @@ The Code Graph is the core data structure in bot-go that represents source code 
 
 **GraphDatabase** (`internal/service/codegraph/graph_db.go`)
 - Abstract interface for graph database operations
-- Supports both Neo4j (production) and Kuzu (embedded/in-memory)
 - All queries use Cypher query language
 
 **Parsers** (`internal/parse/`)
@@ -401,11 +398,11 @@ cg.CreateContainsRelation(ctx, parentID, childID, fileID)
 cg.FlushFile(ctx, fileID)
 ```
 
-## Database Backends
+## Database Backend
 
 ### Neo4j
-- Production-ready, external server
-- Full Cypher support
+- Production-ready graph database
+- Full Cypher query support
 - Requires separate deployment
 
 ```go
@@ -416,21 +413,6 @@ cg, err := codegraph.NewCodeGraph(
     config,
     logger,
 )
-```
-
-### Kuzu
-- Embedded database
-- Supports in-memory or file-based storage
-- No external dependencies
-
-```go
-// In-memory
-config.Kuzu.Path = ":memory:"
-
-// File-based
-config.Kuzu.Path = "/path/to/database"
-
-cg, err := codegraph.NewCodeGraphWithKuzu(config, logger)
 ```
 
 ## Language Support
