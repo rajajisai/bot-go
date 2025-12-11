@@ -635,6 +635,96 @@ Contributions are welcome! Please ensure:
 - Code follows Go conventions
 - Documentation is updated
 
+## Running Parser Tests
+
+Bot-Go includes comprehensive test repositories for validating the parser across different languages. These are located in `tests/repos/` and cover various syntax patterns for each supported language.
+
+**See [tests/README.md](tests/README.md) for detailed documentation of each test repository, including all constructs and syntax patterns covered.**
+
+### Test Repositories
+
+| Repository | Language | Description |
+|------------|----------|-------------|
+| `python-calculator` | Python | Decorators, comprehensions, async/await, match statements, dataclasses |
+| `go-calculator` | Go | Generics, interfaces, goroutines, channels, functional options |
+| `typescript-calculator` | TypeScript | Generics, union types, decorators, async generators, mixins |
+| `java-modern-calculator` | Java 17+ | Records, sealed classes, pattern matching, text blocks |
+| `java8-calculator` | Java 8 | Traditional Java syntax without modern features |
+
+### Using the Test Script
+
+The `run_test.sh` script provides a convenient way to test the parser with these repositories:
+
+```bash
+# Show help
+./run_test.sh --help
+
+# Build index for a repository
+./run_test.sh python-calculator --build-index
+
+# Build index using git HEAD mode (faster)
+./run_test.sh go-calculator --build-index --head
+
+# Dump the code graph for inspection
+./run_test.sh typescript-calculator --test-dump
+
+# Clean up all DB entries for a repository
+./run_test.sh java-modern-calculator --clean
+
+# Run all operations: build, dump, and clean
+./run_test.sh java8-calculator --all
+```
+
+### Test Configuration
+
+The test repositories use a separate configuration file at `tests/source.yaml`. The script automatically uses this config alongside the main `config/app.yaml`.
+
+### What Each Option Does
+
+| Option | Description |
+|--------|-------------|
+| `--build-index` | Process repository files through tree-sitter, build code graph in Neo4j, generate embeddings |
+| `--test-dump` | Output the complete code graph (nodes, relationships, metadata) for debugging |
+| `--clean` | Remove all data for the repository from Neo4j, Qdrant, and MySQL |
+| `--head` | Read files from git HEAD instead of working directory (faster for clean repos) |
+| `--all` | Run build-index, test-dump, and clean in sequence |
+
+### Test Coverage
+
+Each test repository is designed to exercise specific parser capabilities:
+
+**Imports/Modules:**
+- Absolute and relative imports
+- Named and default exports
+- Package/module re-exports
+- External library imports
+
+**Classes/Types:**
+- Inheritance and interfaces
+- Abstract classes
+- Generics/type parameters
+- Enums and constants
+
+**Functions:**
+- Regular and lambda functions
+- Async/await patterns
+- Generators
+- Method overloading
+- Decorators/annotations
+
+**Control Flow:**
+- If-else chains and switch/match
+- For/while/do loops
+- Try-catch-finally
+- Pattern matching (where supported)
+
+**Advanced Patterns:**
+- Higher-order functions
+- Closures
+- Observer pattern
+- Builder pattern
+- Singleton pattern
+
 ## License
 
 This project is intended for educational and development purposes.
