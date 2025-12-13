@@ -2167,3 +2167,15 @@ func (cg *CodeGraph) CleanRepository(ctx context.Context, repoName string) error
 	cg.logger.Info("Neo4j cleanup completed for repository", zap.String("repo", repoName))
 	return nil
 }
+
+// ExecuteRead executes a read-only Cypher query and returns the raw records.
+// This is exposed for use by higher-level query APIs (e.g., codeapi package).
+func (cg *CodeGraph) ExecuteRead(ctx context.Context, query string, params map[string]any) ([]map[string]any, error) {
+	return cg.db.ExecuteRead(ctx, query, params)
+}
+
+// ExecuteReadSingle executes a read-only Cypher query expecting a single record.
+// Returns error if no records found.
+func (cg *CodeGraph) ExecuteReadSingle(ctx context.Context, query string, params map[string]any) (map[string]any, error) {
+	return cg.db.ExecuteReadSingle(ctx, query, params)
+}
