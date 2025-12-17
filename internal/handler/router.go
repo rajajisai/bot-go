@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func SetupRouter(repoController *controller.RepoController, mcpServer *mcp.CodeGraphServer, logger *zap.Logger) *gin.Engine {
+func SetupRouter(repoController *controller.RepoController, mcpServer *mcp.CodeGraphServer, codeAPIController *controller.CodeAPIController, logger *zap.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.New()
@@ -20,7 +20,7 @@ func SetupRouter(repoController *controller.RepoController, mcpServer *mcp.CodeG
 
 	v1 := router.Group("/api/v1")
 	{
-		v1.POST("/processRepo", repoController.ProcessRepo)
+		v1.POST("/buildIndex", repoController.BuildIndex)
 		//v1.POST("/getFunctionsInFile", repoController.GetFunctionsInFile)
 		//v1.POST("/getFunctionDetails", repoController.GetFunctionDetails)
 		v1.POST("/functionDependencies", repoController.GetFunctionDependencies)
@@ -42,6 +42,44 @@ func SetupRouter(repoController *controller.RepoController, mcpServer *mcp.CodeG
 				"status": "healthy",
 			})
 		})
+	}
+
+	// CodeAPI routes
+	if codeAPIController != nil {
+		codeAPI := router.Group("/codeapi/v1")
+		{
+			// Reader endpoints
+			codeAPI.GET("/repos", codeAPIController.ListRepos)
+			codeAPI.POST("/files", codeAPIController.ListFiles)
+			codeAPI.POST("/classes", codeAPIController.ListClasses)
+			codeAPI.POST("/methods", codeAPIController.ListMethods)
+			codeAPI.POST("/functions", codeAPIController.ListFunctions)
+			codeAPI.POST("/classes/find", codeAPIController.FindClasses)
+			codeAPI.POST("/methods/find", codeAPIController.FindMethods)
+			codeAPI.POST("/class", codeAPIController.GetClass)
+			codeAPI.POST("/method", codeAPIController.GetMethod)
+			codeAPI.POST("/class/methods", codeAPIController.GetClassMethods)
+			codeAPI.POST("/class/fields", codeAPIController.GetClassFields)
+
+			// Analyzer endpoints
+			codeAPI.POST("/callgraph", codeAPIController.GetCallGraph)
+			codeAPI.POST("/callers", codeAPIController.GetCallers)
+			codeAPI.POST("/callees", codeAPIController.GetCallees)
+			codeAPI.POST("/data/dependents", codeAPIController.GetDataDependents)
+			codeAPI.POST("/data/sources", codeAPIController.GetDataSources)
+			codeAPI.POST("/impact", codeAPIController.GetImpact)
+			codeAPI.POST("/inheritance", codeAPIController.GetInheritanceTree)
+			codeAPI.POST("/field/accessors", codeAPIController.GetFieldAccessors)
+
+			// Raw Cypher endpoints
+			codeAPI.POST("/cypher", codeAPIController.ExecuteCypher)
+			codeAPI.POST("/cypher/write", codeAPIController.ExecuteCypherWrite)
+
+			// Health check
+			codeAPI.GET("/health", func(c *gin.Context) {
+				c.JSON(200, gin.H{"status": "healthy"})
+			})
+		}
 	}
 
 	// Setup MCP routes

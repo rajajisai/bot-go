@@ -41,12 +41,19 @@ func NewRepoController(repoService *service.RepoService, chunkService *vector.Co
 	}
 }
 
-type ProcessRepoRequest struct {
+type BuildIndexRequest struct {
 	RepoName string `json:"repo_name" binding:"required"`
+	UseHead  bool   `json:"use_head"` // Use git HEAD version instead of working directory
 }
 
-func (rc *RepoController) ProcessRepo(c *gin.Context) {
-	var request ProcessRepoRequest
+type BuildIndexResponse struct {
+	RepoName string `json:"repo_name"`
+	Status   string `json:"status"`
+	Message  string `json:"message,omitempty"`
+}
+
+func (rc *RepoController) BuildIndex(c *gin.Context) {
+	var request BuildIndexRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		rc.logger.Error("Invalid request payload", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -56,12 +63,79 @@ func (rc *RepoController) ProcessRepo(c *gin.Context) {
 		return
 	}
 
-	rc.logger.Info("Processing repository", zap.String("repo_name", request.RepoName))
+	rc.logger.Info("Processing repository",
+		zap.String("repo_name", request.RepoName),
+		zap.Bool("use_head", request.UseHead))
 
-	/*response, err := rc.repoService.ProcessRepository(request.RepoName)
+	ctx := c.Request.Context()
+
+	// Validate repository exists in config
+	repo, err := rc.config.GetRepository(request.RepoName)
 	if err != nil {
-		rc.logger.Error("Failed to process repository",
+		rc.logger.Error("Repository not found in configuration",
 			zap.String("repo_name", request.RepoName),
+			zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   "Repository not found",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Check if MySQL connection is available
+	if rc.mysqlConn == nil {
+		rc.logger.Error("MySQL connection not available")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "MySQL connection not available for file tracking",
+		})
+		return
+	}
+
+	// Create FileVersionRepository for this repository
+	fileVersionRepo, err := db.NewFileVersionRepository(rc.mysqlConn.GetDB(), repo.Name, rc.logger)
+	if err != nil {
+		rc.logger.Error("Failed to create file version repository",
+			zap.String("repo_name", repo.Name),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Failed to initialize file tracking",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Create index builder with processors
+	indexBuilder := NewIndexBuilder(rc.config, rc.processors, fileVersionRepo, rc.logger)
+
+	// Get git info if using HEAD mode
+	var gitInfo *util.GitInfo
+	if request.UseHead {
+		gitInfo, err = util.GetGitInfo(repo.Path)
+		if err != nil {
+			rc.logger.Error("Failed to get git info",
+				zap.String("repo_name", repo.Name),
+				zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "Failed to get git information",
+				"details": err.Error(),
+			})
+			return
+		}
+		if !gitInfo.IsGitRepo {
+			rc.logger.Error("Repository is not a git repository, cannot use use_head flag",
+				zap.String("repo_name", repo.Name),
+				zap.String("path", repo.Path))
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Repository is not a git repository, cannot use use_head flag",
+			})
+			return
+		}
+	}
+
+	// Build indexes
+	if err := indexBuilder.BuildIndexWithGitInfo(ctx, repo, request.UseHead, gitInfo); err != nil {
+		rc.logger.Error("Failed to build indexes for repository",
+			zap.String("repo_name", repo.Name),
 			zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "Failed to process repository",
@@ -71,15 +145,14 @@ func (rc *RepoController) ProcessRepo(c *gin.Context) {
 	}
 
 	rc.logger.Info("Successfully processed repository",
-		zap.String("repo_name", request.RepoName),
-		zap.Int("files_count", len(response.Files)),
-		zap.Int("functions_count", len(response.Functions)))
+		zap.String("repo_name", repo.Name),
+		zap.Bool("use_head", request.UseHead))
 
-	rc.logger.Debug("About to send JSON response")
-	c.JSON(http.StatusOK, response)
-	*/
-	c.JSON(http.StatusOK, nil)
-	rc.logger.Debug("JSON response sent successfully")
+	c.JSON(http.StatusOK, BuildIndexResponse{
+		RepoName: repo.Name,
+		Status:   "completed",
+		Message:  "Repository indexed successfully",
+	})
 }
 
 func (rc *RepoController) GetFunctionsInFile(c *gin.Context) {

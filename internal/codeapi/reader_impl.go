@@ -72,8 +72,8 @@ func (r *repoReaderImpl) Name() string {
 
 // --- File Operations ---
 
-func (r *repoReaderImpl) ListFiles(ctx context.Context) ([]*FileInfo, error) {
-	return r.FindFiles(ctx, FileFilter{})
+func (r *repoReaderImpl) ListFiles(ctx context.Context, limit, offset int) ([]*FileInfo, error) {
+	return r.FindFiles(ctx, FileFilter{Limit: limit, Offset: offset})
 }
 
 func (r *repoReaderImpl) FindFiles(ctx context.Context, filter FileFilter) ([]*FileInfo, error) {
@@ -180,8 +180,8 @@ func (r *repoReaderImpl) FileByID(id int32) FileReader {
 
 // --- Class Operations ---
 
-func (r *repoReaderImpl) ListClasses(ctx context.Context) ([]*ClassInfo, error) {
-	return r.FindClasses(ctx, ClassFilter{})
+func (r *repoReaderImpl) ListClasses(ctx context.Context, limit, offset int) ([]*ClassInfo, error) {
+	return r.FindClasses(ctx, ClassFilter{Limit: limit, Offset: offset})
 }
 
 func (r *repoReaderImpl) FindClasses(ctx context.Context, filter ClassFilter) ([]*ClassInfo, error) {
@@ -281,13 +281,13 @@ func (r *repoReaderImpl) FindClassByName(ctx context.Context, name string) (*Cla
 
 // --- Method Operations ---
 
-func (r *repoReaderImpl) ListMethods(ctx context.Context) ([]*MethodInfo, error) {
-	return r.FindMethods(ctx, MethodFilter{})
+func (r *repoReaderImpl) ListMethods(ctx context.Context, limit, offset int) ([]*MethodInfo, error) {
+	return r.FindMethods(ctx, MethodFilter{Limit: limit, Offset: offset})
 }
 
-func (r *repoReaderImpl) ListFunctions(ctx context.Context) ([]*MethodInfo, error) {
+func (r *repoReaderImpl) ListFunctions(ctx context.Context, limit, offset int) ([]*MethodInfo, error) {
 	isMethod := false
-	return r.FindMethods(ctx, MethodFilter{IsMethod: &isMethod})
+	return r.FindMethods(ctx, MethodFilter{IsMethod: &isMethod, Limit: limit, Offset: offset})
 }
 
 func (r *repoReaderImpl) FindMethods(ctx context.Context, filter MethodFilter) ([]*MethodInfo, error) {

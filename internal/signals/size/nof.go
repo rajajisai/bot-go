@@ -33,8 +33,19 @@ func (s *NOFSignal) Dependencies() []string {
 }
 
 // ComputeClass computes NOF for a class
+// Counts all fields contained in the class from the CodeGraph
 func (s *NOFSignal) ComputeClass(ctx context.Context, classInfo *signals.ClassInfo, sctx *signals.SignalContext) (signals.SignalResult, error) {
-	return signals.SignalResult{}, nil
+	if classInfo == nil {
+		return signals.NewSignalResultError("NOF", signals.ErrNilInput), nil
+	}
+
+	// Count fields from ClassInfo (populated from CodeGraph)
+	fieldCount := len(classInfo.Fields)
+
+	return signals.NewSignalResultWithMetadata("NOF", float64(fieldCount), map[string]any{
+		"class_id":   classInfo.NodeID,
+		"class_name": classInfo.Name,
+	}), nil
 }
 
 // NOPASignal computes Number of Public Attributes
@@ -64,6 +75,22 @@ func (s *NOPASignal) Dependencies() []string {
 }
 
 // ComputeClass computes NOPA for a class
+// Counts public fields in the class from the CodeGraph
 func (s *NOPASignal) ComputeClass(ctx context.Context, classInfo *signals.ClassInfo, sctx *signals.SignalContext) (signals.SignalResult, error) {
-	return signals.SignalResult{}, nil
+	if classInfo == nil {
+		return signals.NewSignalResultError("NOPA", signals.ErrNilInput), nil
+	}
+
+	// Count public fields
+	publicCount := 0
+	for _, field := range classInfo.Fields {
+		if field.Visibility == signals.VisibilityPublic {
+			publicCount++
+		}
+	}
+
+	return signals.NewSignalResultWithMetadata("NOPA", float64(publicCount), map[string]any{
+		"total_fields":  len(classInfo.Fields),
+		"public_fields": publicCount,
+	}), nil
 }

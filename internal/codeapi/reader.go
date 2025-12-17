@@ -23,8 +23,8 @@ type RepoReader interface {
 
 	// --- File Operations ---
 
-	// ListFiles returns all files in the repository
-	ListFiles(ctx context.Context) ([]*FileInfo, error)
+	// ListFiles returns files in the repository with pagination
+	ListFiles(ctx context.Context, limit, offset int) ([]*FileInfo, error)
 
 	// FindFiles returns files matching the filter
 	FindFiles(ctx context.Context, filter FileFilter) ([]*FileInfo, error)
@@ -43,8 +43,8 @@ type RepoReader interface {
 
 	// --- Class Operations ---
 
-	// ListClasses returns all classes in the repository
-	ListClasses(ctx context.Context) ([]*ClassInfo, error)
+	// ListClasses returns classes in the repository with pagination
+	ListClasses(ctx context.Context, limit, offset int) ([]*ClassInfo, error)
 
 	// FindClasses returns classes matching the filter
 	FindClasses(ctx context.Context, filter ClassFilter) ([]*ClassInfo, error)
@@ -60,11 +60,11 @@ type RepoReader interface {
 
 	// --- Method/Function Operations ---
 
-	// ListMethods returns all methods in the repository
-	ListMethods(ctx context.Context) ([]*MethodInfo, error)
+	// ListMethods returns methods in the repository with pagination
+	ListMethods(ctx context.Context, limit, offset int) ([]*MethodInfo, error)
 
-	// ListFunctions returns all top-level functions (not class methods)
-	ListFunctions(ctx context.Context) ([]*MethodInfo, error)
+	// ListFunctions returns top-level functions (not class methods) with pagination
+	ListFunctions(ctx context.Context, limit, offset int) ([]*MethodInfo, error)
 
 	// FindMethods returns methods matching the filter
 	FindMethods(ctx context.Context, filter MethodFilter) ([]*MethodInfo, error)

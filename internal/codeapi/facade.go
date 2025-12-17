@@ -18,17 +18,28 @@ type CodeAPI interface {
 	// Analyzer returns the GraphAnalyzer for graph traversals
 	Analyzer() GraphAnalyzer
 
+	// --- Raw Query Access ---
+
+	// ExecuteCypher executes a raw Cypher query and returns the results.
+	// Use this for complex queries not covered by Reader or Analyzer.
+	// The query should be read-only; use ExecuteCypherWrite for mutations.
+	ExecuteCypher(ctx context.Context, query string, params map[string]any) ([]map[string]any, error)
+
+	// ExecuteCypherWrite executes a write Cypher query (create, update, delete).
+	// Returns the result records if any.
+	ExecuteCypherWrite(ctx context.Context, query string, params map[string]any) ([]map[string]any, error)
+
 	// --- Convenience Methods ---
 	// These combine Reader and Analyzer for common use cases
 
 	// GetClassWithCallGraph returns a class with its methods' call graphs
-	GetClassWithCallGraph(ctx context.Context, repoName string, classID ast.NodeID, callDepth int) (*ClassWithCallGraph, error)
+	//GetClassWithCallGraph(ctx context.Context, repoName string, classID ast.NodeID, callDepth int) (*ClassWithCallGraph, error)
 
 	// GetMethodWithContext returns a method with its class context and call graph
-	GetMethodWithContext(ctx context.Context, repoName string, methodID ast.NodeID, callDepth int) (*MethodWithContext, error)
+	//GetMethodWithContext(ctx context.Context, repoName string, methodID ast.NodeID, callDepth int) (*MethodWithContext, error)
 
 	// FindAndAnalyze finds an entity by name and returns it with analysis
-	FindAndAnalyze(ctx context.Context, req FindAndAnalyzeRequest) (*FindAndAnalyzeResult, error)
+	//FindAndAnalyze(ctx context.Context, req FindAndAnalyzeRequest) (*FindAndAnalyzeResult, error)
 }
 
 // ClassWithCallGraph combines class info with call graphs for its methods
@@ -39,11 +50,11 @@ type ClassWithCallGraph struct {
 
 // MethodWithContext provides method info with surrounding context
 type MethodWithContext struct {
-	Method     *MethodInfo
-	Class      *ClassInfo // nil if top-level function
-	File       *FileInfo
-	Callers    *CallGraph
-	Callees    *CallGraph
+	Method  *MethodInfo
+	Class   *ClassInfo // nil if top-level function
+	File    *FileInfo
+	Callers *CallGraph
+	Callees *CallGraph
 }
 
 // FindAndAnalyzeRequest specifies what to find and analyze
@@ -69,9 +80,9 @@ type FindAndAnalyzeResult struct {
 	Variable *VariableInfo
 
 	// Analysis results
-	CallGraph  *CallGraph
-	DataFlow   *DependencyGraph
-	Impact     *ImpactResult
+	CallGraph *CallGraph
+	DataFlow  *DependencyGraph
+	Impact    *ImpactResult
 }
 
 // VariableInfo contains information about a variable
@@ -118,6 +129,16 @@ func (api *codeAPIImpl) Reader() CodeReader {
 // Analyzer returns the GraphAnalyzer
 func (api *codeAPIImpl) Analyzer() GraphAnalyzer {
 	return api.analyzer
+}
+
+// ExecuteCypher executes a raw read-only Cypher query
+func (api *codeAPIImpl) ExecuteCypher(ctx context.Context, query string, params map[string]any) ([]map[string]any, error) {
+	return api.graph.ExecuteRead(ctx, query, params)
+}
+
+// ExecuteCypherWrite executes a raw write Cypher query
+func (api *codeAPIImpl) ExecuteCypherWrite(ctx context.Context, query string, params map[string]any) ([]map[string]any, error) {
+	return api.graph.ExecuteWrite(ctx, query, params)
 }
 
 // GetClassWithCallGraph returns a class with call graphs for all its methods

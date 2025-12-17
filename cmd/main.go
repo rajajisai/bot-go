@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"bot-go/internal/codeapi"
 	"bot-go/internal/config"
 	"bot-go/internal/controller"
 	"bot-go/internal/db"
@@ -121,7 +122,14 @@ func main() {
 	repoController := controller.NewRepoController(container.RepoService, container.ChunkService, container.NgramService, container.Processors, container.MySQLConn, cfg, logger)
 	mcpServer := mcp.NewCodeGraphServer(container.RepoService, cfg, logger)
 
-	router := handler.SetupRouter(repoController, mcpServer, logger)
+	// Initialize CodeAPI controller if CodeGraph is available
+	var codeAPIController *controller.CodeAPIController
+	if container.CodeGraph != nil {
+		codeAPI := codeapi.NewCodeAPI(container.CodeGraph, logger)
+		codeAPIController = controller.NewCodeAPIController(codeAPI, logger)
+	}
+
+	router := handler.SetupRouter(repoController, mcpServer, codeAPIController, logger)
 
 	logger.Info("Starting server", zap.Int("port", cfg.App.Port))
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.App.Port), router); err != nil {

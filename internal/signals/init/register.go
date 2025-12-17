@@ -1,6 +1,8 @@
 package signalinit
 
 import (
+	"fmt"
+
 	"bot-go/internal/config"
 	"bot-go/internal/signals"
 	"bot-go/internal/signals/change"
@@ -72,13 +74,21 @@ func RegisterChangeSignals(registry *signals.SignalRegistry, gitAnalyzer util.Gi
 	registry.Register(change.NewCMSignal(gitAnalyzer))
 }
 
-// RegisterAllSignals registers all signals including change history
-// gitConfig can be nil to use default on-demand mode
+// RegisterAllSignals registers all signals including change history.
+// gitConfig must be non-nil with Enabled=true and a valid Mode set.
+// Returns an error if git analysis configuration is missing or invalid.
+//
+// Required configuration in app.yaml:
+//
+//	git_analysis:
+//	  enabled: true
+//	  mode: "ondemand"  # or "precompute" (not yet implemented)
+//	  lookback_commits: 1000  # optional, defaults to 1000
 func RegisterAllSignals(registry *signals.SignalRegistry, repoPath string, gitConfig *config.GitAnalysisConfig) error {
 	RegisterDefaultSignals(registry)
 	gitAnalyzer, err := util.NewGitAnalyzer(repoPath, gitConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create git analyzer: %w", err)
 	}
 	RegisterChangeSignals(registry, gitAnalyzer)
 	return nil

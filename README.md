@@ -487,6 +487,138 @@ Both tools return hierarchical XML-style output with hover information and sourc
 
 See [MCP documentation](https://modelcontextprotocol.io/) for integration details.
 
+## CodeAPI
+
+Bot-Go provides a clean, high-level API for querying the code graph at `/codeapi/v1`. This API combines:
+- **CodeReader**: Repository-scoped entity queries (files, classes, methods, fields)
+- **GraphAnalyzer**: Graph traversals (call graphs, data flow, impact analysis)
+
+### Reader Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/codeapi/v1/repos` | List all repositories |
+| POST | `/codeapi/v1/files` | List files (with pagination) |
+| POST | `/codeapi/v1/classes` | List classes (with pagination) |
+| POST | `/codeapi/v1/methods` | List methods (with pagination) |
+| POST | `/codeapi/v1/functions` | List top-level functions |
+| POST | `/codeapi/v1/classes/find` | Find classes by filter |
+| POST | `/codeapi/v1/methods/find` | Find methods by filter |
+| POST | `/codeapi/v1/class` | Get class by ID |
+| POST | `/codeapi/v1/method` | Get method by ID |
+| POST | `/codeapi/v1/class/methods` | Get methods of a class |
+| POST | `/codeapi/v1/class/fields` | Get fields of a class |
+
+### Analyzer Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/codeapi/v1/callgraph` | Get call graph (by ID or name) |
+| POST | `/codeapi/v1/callers` | Get callers of a function |
+| POST | `/codeapi/v1/callees` | Get callees of a function |
+| POST | `/codeapi/v1/data/dependents` | Get data dependents |
+| POST | `/codeapi/v1/data/sources` | Get data sources |
+| POST | `/codeapi/v1/impact` | Impact analysis |
+| POST | `/codeapi/v1/inheritance` | Get inheritance tree |
+| POST | `/codeapi/v1/field/accessors` | Get field accessors |
+
+### Raw Cypher Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/codeapi/v1/cypher` | Execute read-only Cypher |
+| POST | `/codeapi/v1/cypher/write` | Execute write Cypher |
+
+### Example Usage
+
+```bash
+# List all repositories
+curl http://localhost:8181/codeapi/v1/repos
+
+# List classes with pagination
+curl -X POST http://localhost:8181/codeapi/v1/classes \
+  -H "Content-Type: application/json" \
+  -d '{"repo_name": "my-project", "limit": 10, "offset": 0}'
+
+# Get call graph for a function
+curl -X POST http://localhost:8181/codeapi/v1/callgraph \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_name": "my-project",
+    "function_name": "ProcessFile",
+    "direction": "both",
+    "max_depth": 3
+  }'
+
+# Find methods containing "Process"
+curl -X POST http://localhost:8181/codeapi/v1/methods/find \
+  -H "Content-Type: application/json" \
+  -d '{"repo_name": "my-project", "name_like": "Process", "limit": 20}'
+
+# Execute raw Cypher query
+curl -X POST http://localhost:8181/codeapi/v1/cypher \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (f:Function)-[:CALLS_FUNCTION*1..2]->(t) WHERE f.name = $name RETURN t.name",
+    "params": {"name": "main"}
+  }'
+
+# Impact analysis
+curl -X POST http://localhost:8181/codeapi/v1/impact \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_name": "my-project",
+    "name": "ProcessFile",
+    "node_type": "function",
+    "include_call_graph": true,
+    "include_data_flow": true,
+    "max_depth": 3
+  }'
+```
+
+### Response Examples
+
+**List Classes Response:**
+```json
+{
+  "classes": [
+    {
+      "id": 12345,
+      "name": "CodeGraph",
+      "file_path": "internal/service/code_graph.go",
+      "file_id": 1,
+      "range": {"start": {"line": 10, "character": 0}, "end": {"line": 100, "character": 1}}
+    }
+  ]
+}
+```
+
+**Call Graph Response:**
+```json
+{
+  "call_graph": {
+    "root": {
+      "id": 12345,
+      "name": "ProcessFile",
+      "file_path": "internal/controller/processor.go",
+      "depth": 0
+    },
+    "nodes": {
+      "12345": {"id": 12345, "name": "ProcessFile", "depth": 0},
+      "12346": {"id": 12346, "name": "ParseAST", "depth": 1},
+      "12347": {"id": 12347, "name": "WriteNode", "depth": 2}
+    },
+    "edges": [
+      {"caller_id": 12345, "callee_id": 12346},
+      {"caller_id": 12346, "callee_id": 12347}
+    ],
+    "direction": "outgoing",
+    "max_depth": 3,
+    "truncated": false
+  }
+}
+```
+
 ## Testing
 
 ```bash
@@ -514,9 +646,17 @@ bot-go/
 │   ├── chunk_test.go           # Chunking test utility
 │   └── run_eval.go             # Evaluation runner
 ├── internal/
+│   ├── codeapi/                # High-level code graph query API
+│   │   ├── types.go            # Shared types (ClassInfo, CallGraph, etc.)
+│   │   ├── reader.go           # CodeReader interface
+│   │   ├── analyzer.go         # GraphAnalyzer interface
+│   │   ├── facade.go           # CodeAPI facade
+│   │   ├── reader_impl.go      # CodeReader implementation
+│   │   └── analyzer_impl.go    # GraphAnalyzer implementation
 │   ├── config/                 # Configuration loading
 │   ├── controller/             # Business logic
 │   │   ├── repo_controller.go  # API controller
+│   │   ├── codeapi_controller.go # CodeAPI HTTP handlers
 │   │   ├── repo_processor.go   # CodeGraph processing
 │   │   └── post_process.go     # LSP enrichment
 │   ├── handler/                # HTTP handlers

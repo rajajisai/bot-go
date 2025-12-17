@@ -239,6 +239,186 @@ MCP Server (port from app.yaml mcp.port, default 8282):
 - Tools return hierarchical XML-style output with hover information
 - Runs on separate goroutine/port from main REST API
 
+**CodeAPI** (path: `/codeapi/v1`):
+
+A clean, high-level API for querying the code graph. Provides two main interfaces:
+- **CodeReader**: Repository-scoped entity queries (files, classes, methods, fields)
+- **GraphAnalyzer**: Graph traversals (call graphs, data flow, impact analysis)
+
+**Reader Endpoints:**
+
+- `GET /codeapi/v1/repos` - List all available repositories
+  - Returns: `{"repos": ["repo1", "repo2"]}`
+
+- `POST /codeapi/v1/files` - List files in a repository
+  - Parameters: `{"repo_name": "string", "limit": int, "offset": int}`
+  - Returns: `{"files": [FileInfo...]}`
+
+- `POST /codeapi/v1/classes` - List classes in a repository
+  - Parameters: `{"repo_name": "string", "limit": int, "offset": int}`
+  - Returns: `{"classes": [ClassInfo...]}`
+
+- `POST /codeapi/v1/methods` - List methods in a repository
+  - Parameters: `{"repo_name": "string", "limit": int, "offset": int}`
+  - Returns: `{"methods": [MethodInfo...]}`
+
+- `POST /codeapi/v1/functions` - List top-level functions (not class methods)
+  - Parameters: `{"repo_name": "string", "limit": int, "offset": int}`
+  - Returns: `{"functions": [MethodInfo...]}`
+
+- `POST /codeapi/v1/classes/find` - Find classes by filter
+  - Parameters: `{"repo_name": "string", "name": "string", "name_like": "string", "file_path": "string", "limit": int}`
+  - Returns: `{"classes": [ClassInfo...]}`
+
+- `POST /codeapi/v1/methods/find` - Find methods by filter
+  - Parameters: `{"repo_name": "string", "name": "string", "class_name": "string", "file_path": "string", "limit": int}`
+  - Returns: `{"methods": [MethodInfo...]}`
+
+- `POST /codeapi/v1/class` - Get class by ID with optional details
+  - Parameters: `{"repo_name": "string", "class_id": int64, "include_methods": bool, "include_fields": bool}`
+  - Returns: `{"class": ClassInfo}`
+
+- `POST /codeapi/v1/method` - Get method by ID
+  - Parameters: `{"repo_name": "string", "method_id": int64}`
+  - Returns: `{"method": MethodInfo}`
+
+- `POST /codeapi/v1/class/methods` - Get methods of a class
+  - Parameters: `{"repo_name": "string", "class_id": int64}`
+  - Returns: `{"methods": [MethodInfo...]}`
+
+- `POST /codeapi/v1/class/fields` - Get fields of a class
+  - Parameters: `{"repo_name": "string", "class_id": int64}`
+  - Returns: `{"fields": [FieldInfo...]}`
+
+**Analyzer Endpoints:**
+
+- `POST /codeapi/v1/callgraph` - Get call graph for a function
+  - Parameters:
+    - `repo_name` (required): Repository name
+    - `function_id` (optional): Function node ID
+    - `function_name` (optional): Function name (if function_id not provided)
+    - `class_name` (optional): Class name to scope search
+    - `file_path` (optional): File path to scope search
+    - `direction`: "outgoing" (callees), "incoming" (callers), or "both"
+    - `max_depth`: Maximum traversal depth (default: 3)
+  - Returns: `{"call_graph": CallGraph}`
+
+- `POST /codeapi/v1/callers` - Get functions that call a function
+  - Parameters: `{"repo_name": "string", "function_id": int64, "max_depth": int}`
+  - Returns: `{"call_graph": CallGraph}`
+
+- `POST /codeapi/v1/callees` - Get functions called by a function
+  - Parameters: `{"repo_name": "string", "function_id": int64, "max_depth": int}`
+  - Returns: `{"call_graph": CallGraph}`
+
+- `POST /codeapi/v1/data/dependents` - Get nodes that depend on a value
+  - Parameters:
+    - `repo_name` (required): Repository name
+    - `node_id` (optional): Node ID
+    - `variable_name` (optional): Variable name (if node_id not provided)
+    - `file_path` (optional): File path to scope search
+    - `max_depth`: Maximum traversal depth
+    - `include_indirect`: Include transitive dependencies
+  - Returns: `{"dependency_graph": DependencyGraph}`
+
+- `POST /codeapi/v1/data/sources` - Get nodes that contribute to a value
+  - Parameters: `{"repo_name": "string", "node_id": int64, "max_depth": int}`
+  - Returns: `{"dependency_graph": DependencyGraph}`
+
+- `POST /codeapi/v1/impact` - Impact analysis for a node
+  - Parameters:
+    - `repo_name` (required): Repository name
+    - `node_id` (optional): Node ID
+    - `name` (optional): Entity name (if node_id not provided)
+    - `node_type`: "function", "class", "field", or "variable"
+    - `file_path` (optional): File path to scope search
+    - `max_depth`: Maximum traversal depth
+    - `include_call_graph`: Include call graph in impact
+    - `include_data_flow`: Include data flow in impact
+  - Returns: `{"impact": ImpactResult}`
+
+- `POST /codeapi/v1/inheritance` - Get inheritance tree for a class
+  - Parameters: `{"repo_name": "string", "class_id": int64}`
+  - Returns: `{"inheritance_tree": InheritanceTree}`
+
+- `POST /codeapi/v1/field/accessors` - Get methods that access a field
+  - Parameters:
+    - `repo_name` (required): Repository name
+    - `field_id` (optional): Field node ID
+    - `class_name` (optional): Class name (if field_id not provided)
+    - `field_name` (optional): Field name (if field_id not provided)
+  - Returns: `{"field_accessors": FieldAccessResult}`
+
+**Raw Cypher Endpoints:**
+
+- `POST /codeapi/v1/cypher` - Execute read-only Cypher query
+  - Parameters: `{"query": "MATCH (n) RETURN n LIMIT 10", "params": {"key": "value"}}`
+  - Returns: `{"results": [...]}`
+
+- `POST /codeapi/v1/cypher/write` - Execute write Cypher query
+  - Parameters: `{"query": "CREATE (n:Label {name: $name})", "params": {"name": "test"}}`
+  - Returns: `{"results": [...]}`
+
+**Example Usage:**
+```bash
+# List all repositories
+curl http://localhost:8181/codeapi/v1/repos
+
+# List classes with pagination
+curl -X POST http://localhost:8181/codeapi/v1/classes \
+  -H "Content-Type: application/json" \
+  -d '{"repo_name": "bot-go", "limit": 10, "offset": 0}'
+
+# Get call graph for a function by name
+curl -X POST http://localhost:8181/codeapi/v1/callgraph \
+  -H "Content-Type: application/json" \
+  -d '{"repo_name": "bot-go", "function_name": "ProcessFile", "direction": "both", "max_depth": 3}'
+
+# Find all methods containing "Process" in name
+curl -X POST http://localhost:8181/codeapi/v1/methods/find \
+  -H "Content-Type: application/json" \
+  -d '{"repo_name": "bot-go", "name_like": "Process", "limit": 20}'
+
+# Execute raw Cypher query
+curl -X POST http://localhost:8181/codeapi/v1/cypher \
+  -H "Content-Type: application/json" \
+  -d '{"query": "MATCH (f:Function)-[:CALLS_FUNCTION*1..2]->(target) WHERE f.name = $name RETURN target.name", "params": {"name": "main"}}'
+```
+
+**Programmatic Usage (Go):**
+```go
+import "bot-go/internal/codeapi"
+
+// Initialize
+api := codeapi.NewCodeAPI(codeGraph, logger)
+
+// Reader queries
+repo := api.Reader().Repo("bot-go")
+classes, _ := repo.ListClasses(ctx, 100, 0)
+class, _ := repo.FindClassByName(ctx, "CodeGraph")
+methods, _ := repo.GetClassMethods(ctx, classID)
+
+// File-scoped queries
+file := repo.File("internal/service/code_graph.go")
+methods, _ := file.ListMethods(ctx)
+
+// Analyzer queries
+callGraph, _ := api.Analyzer().GetCallGraph(ctx, functionID, codeapi.CallGraphOptions{
+    Direction: codeapi.DirectionBoth,
+    MaxDepth:  3,
+})
+
+// Impact analysis
+impact, _ := api.Analyzer().GetImpact(ctx, nodeID, codeapi.ImpactOptions{
+    IncludeCallGraph: true,
+    IncludeDataFlow:  true,
+    MaxDepth:         3,
+})
+
+// Raw Cypher
+results, _ := api.ExecuteCypher(ctx, "MATCH (n:Function) RETURN n.name LIMIT 10", nil)
+```
+
 ## Important Patterns
 
 ### Graph Database Abstraction

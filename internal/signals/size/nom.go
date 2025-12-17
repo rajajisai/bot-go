@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"bot-go/internal/signals"
+	"bot-go/internal/signals/util"
 )
 
 // NOMSignal computes Number of Methods
@@ -33,16 +34,31 @@ func (s *NOMSignal) Dependencies() []string {
 }
 
 // ComputeClass computes NOM for a class
+// Counts all methods contained in the class from the CodeGraph
 func (s *NOMSignal) ComputeClass(ctx context.Context, classInfo *signals.ClassInfo, sctx *signals.SignalContext) (signals.SignalResult, error) {
-	return signals.SignalResult{}, nil
+	if classInfo == nil {
+		return signals.NewSignalResultError("NOM", signals.ErrNilInput), nil
+	}
+
+	// Count methods from ClassInfo (populated from CodeGraph)
+	methodCount := len(classInfo.Methods)
+
+	return signals.NewSignalResultWithMetadata("NOM", float64(methodCount), map[string]any{
+		"class_id":   classInfo.NodeID,
+		"class_name": classInfo.Name,
+	}), nil
 }
 
 // NOMNAMMSignal computes Number of Methods without Accessors/Mutators
-type NOMNAMMSignal struct{}
+type NOMNAMMSignal struct {
+	accessorDetector *util.AccessorDetector
+}
 
 // NewNOMNAMMSignal creates a new NOMNAMM signal
 func NewNOMNAMMSignal() *NOMNAMMSignal {
-	return &NOMNAMMSignal{}
+	return &NOMNAMMSignal{
+		accessorDetector: util.NewAccessorDetector(),
+	}
 }
 
 // Metadata returns information about this signal
@@ -64,6 +80,27 @@ func (s *NOMNAMMSignal) Dependencies() []string {
 }
 
 // ComputeClass computes NOMNAMM for a class
+// Total method count minus accessor methods
 func (s *NOMNAMMSignal) ComputeClass(ctx context.Context, classInfo *signals.ClassInfo, sctx *signals.SignalContext) (signals.SignalResult, error) {
-	return signals.SignalResult{}, nil
+	if classInfo == nil {
+		return signals.NewSignalResultError("NOMNAMM", signals.ErrNilInput), nil
+	}
+
+	// Count all methods
+	totalMethods := len(classInfo.Methods)
+
+	// Count accessor methods
+	accessorCount := 0
+	for _, method := range classInfo.Methods {
+		if s.accessorDetector.IsAccessor(method) {
+			accessorCount++
+		}
+	}
+
+	nomNamm := totalMethods - accessorCount
+
+	return signals.NewSignalResultWithMetadata("NOMNAMM", float64(nomNamm), map[string]any{
+		"total_methods":  totalMethods,
+		"accessor_count": accessorCount,
+	}), nil
 }

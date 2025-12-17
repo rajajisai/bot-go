@@ -2179,3 +2179,9 @@ func (cg *CodeGraph) ExecuteRead(ctx context.Context, query string, params map[s
 func (cg *CodeGraph) ExecuteReadSingle(ctx context.Context, query string, params map[string]any) (map[string]any, error) {
 	return cg.db.ExecuteReadSingle(ctx, query, params)
 }
+
+// ExecuteWrite executes a write Cypher query and returns the raw records.
+// This is exposed for use by higher-level query APIs (e.g., codeapi package).
+func (cg *CodeGraph) ExecuteWrite(ctx context.Context, query string, params map[string]any) ([]map[string]any, error) {
+	return cg.db.ExecuteWrite(ctx, query, params)
+}
