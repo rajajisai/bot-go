@@ -15,8 +15,8 @@ docker run -d \
     -e NEO4J_AUTH=neo4j/armchair \ 
     neo4j:5.13
 
-docker run -d -p 6333:6333 -p 6334:6334 \
-      -v "~/qdrant_storage:/qdrant/storage" \
+docker run -d -p 6333:6333 -p 6334:6334 \ 
+      -v ~/qdrant_storage:/qdrant/storage \
       qdrant/qdrant
 
 # https://github.com/qdrant/qdrant-web-ui.git
